@@ -1,0 +1,1289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f4f4f2">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>ไหม้รัก</title>
+<style>
+  /* one typeface everywhere: Menlo (on Macs and iPhones), with close monospaced stand-ins elsewhere */
+  :root { --font: Menlo, Consolas, "DejaVu Sans Mono", monospace; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; overscroll-behavior: none; }
+  body {
+    overflow: hidden;
+    background: #f4f4f2;              /* the page's white, so nothing dark flashes before the ash is drawn */
+    height: 100dvh;                    /* the real visible height on phones, under the address bar */
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    touch-action: none;                /* no pinch-zoom, scrolling or pull-to-refresh fighting the swipe */
+  }
+
+  #ash {
+    position: fixed; inset: 0; width: 100%; height: 100%; z-index: 2;
+    cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none;
+  }
+  #ash.sweeping { cursor: grabbing; }
+  /* the word is drawn in ash on the canvas; this copy is for screen readers only */
+  #words { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  #wordfx { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 3; pointer-events: none; }
+  /* the five objects: small coloured dots that surface in the middle of the final white screen */
+  #objects {
+    position: fixed; left: 50%; top: 50%; z-index: 5; transform: translate(-50%, -50%);
+    display: flex; align-items: center; gap: clamp(18px, 3.2vmin, 34px); pointer-events: none;
+  }
+  #objects span {
+    position: relative; display: block; flex: 0 0 auto;
+    width: clamp(10px, 1.4vmin, 14px); height: clamp(10px, 1.4vmin, 14px); border-radius: 50%;
+    background: var(--c);
+    box-shadow: 0 0 3px 1.5px color-mix(in srgb, var(--c) 50%, transparent), 0 0 7px 3px color-mix(in srgb, var(--c) 14%, transparent);   /* just a soft, slightly blurred edge */
+    opacity: 0; transform: scale(.4);
+    transition: opacity .6s ease, transform .6s cubic-bezier(.2, .8, .2, 1);
+  }
+  /* a near-white object: white would vanish on the white page, so it shows as a pale grey dot with a soft grey edge */
+  #objects span.light { background: color-mix(in srgb, var(--c) 70%, #888); box-shadow: 0 0 3px 1.5px rgba(60, 60, 55, .13), 0 0 7px 3px rgba(60, 60, 55, .04); }
+  #objects.show span { opacity: 1; transform: none; animation: dotGlow 3.4s ease-in-out var(--breath-delay, 0s) infinite alternate; }   /* staggered breathing (the burn itself is never delayed) */
+  /* a dot fading away: its colour drains to a faint, almost see-through grey */
+  #objects.show span.burnt {
+    background: #a3a3a0; box-shadow: 0 0 0 1px rgba(0, 0, 0, .05); opacity: var(--ash-dot, .15);
+    filter: none; transition: none;
+    animation: dotBurn 2.2s ease-out both;
+  }
+  #objects.show span.burnt.done { animation: none; transition: opacity .6s ease, transform .6s cubic-bezier(.2, .8, .2, 1); }   /* burnt on an earlier object: grey from the start */
+  @keyframes dotBurn {   /* no flare: the colour simply drains away to a faint grey */
+    0%   { background: var(--c); box-shadow: 0 0 3px 1.5px color-mix(in srgb, var(--c) 50%, transparent), 0 0 7px 3px color-mix(in srgb, var(--c) 14%, transparent); opacity: 1; }
+    100% { background: #a3a3a0; box-shadow: 0 0 0 1px rgba(0, 0, 0, .05); opacity: var(--ash-dot, .15); }   /* --ash-dot: how solid the grey dot left behind is (1 = solid, lower = more see-through) */
+  }
+  @keyframes dotGlow { from { filter: brightness(1) saturate(1); } to { filter: brightness(1.18) saturate(1.25); } }   /* a slow breath */
+  /* "Next", under the five dots */
+  #next {
+    position: fixed; left: 50%; top: calc(50% + clamp(44px, 7vmin, 64px)); z-index: 5;
+    transform: translate(-50%, 6px);
+    font: 400 clamp(14px, 1.9vmin, 18px) var(--font); letter-spacing: .12em;
+    color: #3a3936; background: none; border: 0;
+    padding: .4em 1.2em; min-height: 48px; min-width: 96px; cursor: pointer;   /* a comfortable thumb-sized target */
+    opacity: 0; pointer-events: none;
+    transition: opacity .8s ease .5s, transform .8s ease .5s, color .3s ease;
+  }
+  #next.show { opacity: 1; pointer-events: auto; transform: translate(-50%, 0); }
+  #next:hover { color: #000; }
+  #next:focus-visible { outline: 2px solid #5f7891; outline-offset: 3px; }
+  #hint, #readhint {
+    position: fixed; left: 0; right: 0; bottom: calc(9dvh + env(safe-area-inset-bottom)); z-index: 4;
+    margin: 0 auto; padding: 0 24px; text-align: center; pointer-events: none;
+    font: italic 400 clamp(14px, 1.9vmin, 19px) var(--font);
+    letter-spacing: .04em;
+    color: #3a3936;
+    transition: opacity 1.2s ease;
+  }
+  #hint.gone, #readhint.gone { opacity: 0; }
+  /* words that open a paragraph: an invisible button over each ash word (the letters themselves are drawn on the canvas), with a faint line beneath */
+  .wordbtn {
+    position: fixed; left: 0; top: 0; z-index: 4; margin: 0; padding: 0; border: 0; background: none; cursor: pointer;
+    opacity: 0; pointer-events: none; transition: opacity 1.2s ease;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .wordbtn::after { content: ""; position: absolute; left: 0; right: 0; bottom: 18%; height: 1px; background: rgba(58, 57, 54, .28); transition: background .3s ease; }
+  .wordbtn.show { opacity: 1; pointer-events: auto; }
+  .wordbtn:hover::after, .wordbtn:focus-visible::after { background: rgba(58, 57, 54, .65); }
+  .wordbtn:focus-visible { outline: 2px solid #5f7891; outline-offset: 4px; }
+  /* the paragraph that opens from a word */
+  #note {
+    position: fixed; inset: 0; z-index: 8; display: flex; align-items: center; justify-content: center; padding: 24px;
+    background: transparent; -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);   /* no white wash: the page shows through, only softened a touch so the text stays clear */
+    opacity: 0; pointer-events: none; transition: opacity .5s ease;
+  }
+  #note.open { opacity: 1; pointer-events: auto; }
+  #note .card {
+    position: relative; max-width: min(86vw, 440px); padding: 30px 30px 24px; background: transparent;
+    box-shadow: none; color: #3a3936; font-family: var(--font);
+    transform: translateY(8px); transition: transform .5s ease;
+  }
+  #note.open .card { transform: none; }
+  #note .card:focus { outline: none; }
+  #note .from { margin: 0 0 6px; font-size: clamp(11px, 1.4vmin, 13px); letter-spacing: .14em; text-transform: uppercase; opacity: .55; }
+  #note h2 { margin: 0 0 14px; font: 400 clamp(18px, 2.6vmin, 24px) var(--font); letter-spacing: .12em; }
+  #note p.text { margin: 0; font-size: clamp(13px, 1.75vmin, 16px); line-height: 1.75; }
+  #note .close { display: block; margin: 20px 0 0 auto; min-height: 44px; padding: 0 4px; border: 0; background: none; color: #3a3936; font: 400 clamp(13px, 1.7vmin, 15px) var(--font); letter-spacing: .12em; cursor: pointer; opacity: .7; }
+  #note .close:hover { opacity: 1; }
+  #note .close:focus-visible { outline: 2px solid #5f7891; outline-offset: 3px; }
+  /* the end of the round: the grey dots fade away and this line takes their place */
+  #objects { transition: opacity .9s ease; }   /* matches ENDING_FADE_MS */
+  #objects.gone { opacity: 0; }
+  #ending {
+    position: fixed; left: 0; right: 0; top: 50%; z-index: 5; transform: translateY(-50%);
+    margin: 0; padding: 0 24px; text-align: center; pointer-events: none;
+    font: italic 400 clamp(14px, 1.9vmin, 19px) var(--font); letter-spacing: .04em;
+    color: #3a3936; opacity: 0; transition: opacity 1.8s ease .6s;
+  }
+  #ending.show { opacity: 1; }
+
+</style>
+</head>
+<body>
+
+<canvas id="ash" aria-hidden="true"></canvas>
+<canvas id="wordfx" aria-hidden="true"></canvas>
+<div id="objects" role="img" aria-label="five objects"></div>
+<button id="next" type="button" tabindex="-1">Next</button>
+<p id="words" aria-live="polite"></p>
+<p id="hint" class="gone">Swipe away what’s left of us...</p>
+<p id="readhint" class="gone">Tap to read</p>
+<p id="ending" aria-live="polite">It’s time to begin again.</p>
+<div id="note" role="dialog" aria-modal="true" aria-labelledby="note-word"><div class="card" tabindex="-1"><p class="from"></p><h2 id="note-word"></h2><p class="text"></p><button class="close" type="button">Close</button></div></div>
+
+<script>
+/* the five objects live in their own files in the objects folder, one per NFC slot */
+const OBJECT_COUNT = 5;
+const OBJECTS = [];
+function OBJECT(slot, details) { OBJECTS[slot - 1] = details; }
+</script>
+<script>
+// load the five object files, always fresh (a phone never keeps an old copy after a file is changed)
+for (const f of ["Final Flower", "Final Photoframe", "Final Sweater", "Final Doll", "Final Musicbox"])
+  document.write(`<script src="objects/${encodeURIComponent(f)}.js?v=${Date.now()}"><\/script>`);
+</script>
+<script>
+/* ───────────── edit me ───────────── */
+const SMALL_SCREEN = () => Math.min(innerWidth, innerHeight) < 600;   // a phone (or a very small window)
+const PARTICLES = 30000;   // at most this many ash flakes make up the silhouette (fewer on small screens)
+/* ─────────────────────────────────── */
+
+/* ───────────── the objects ───────────── */
+// Each object's details (colour, words, picture, fine-tuning) are in its own file in the objects folder:
+// Final Flower.js (slot 1), Final Photoframe.js (2), Final Sweater.js (3), Final Doll.js (4), Final Musicbox.js (5).
+// The slot is the number its NFC tag opens (…/?pick=1 and so on); keep each object in its slot once the tags are written.
+for (let k = 0; k < OBJECT_COUNT; k++) if (!OBJECTS[k]) {   // a file that didn't load: keep the slot, so the tags still line up
+  console.warn("object file for slot " + (k + 1) + " is missing");
+  OBJECTS[k] = { name: "slot " + (k + 1), colour: "#cccccc", words: [], image: null };
+}
+for (const o of OBJECTS) o.words = o.words || [];
+const DOT_BURN_AFTER_MS = 500;   // how long after the dots have all appeared this object's dot burns away, in milliseconds
+const DOTS_AFTER_MS = 1500;   // how long after the second swipe the five dots appear, in milliseconds
+const ENDING_AFTER_MS = 1000;   // after "Next" on the last object of the round: how long the all-grey dots stay before they fade and "It's time to begin again." appears, in milliseconds
+const ENDING_FADE_MS = 900;     // how long the dots take to fade out or back in on the way to the closing, in milliseconds
+// ---- the order this visitor picked the real objects in, read from the NFC tags ----
+// …/?reset clears the picks on that phone (for testing, or for staff)
+const PICKS_KEY = "maihuarak-picks";
+const PICKS_FORGET_MS = 2 * 60 * 60 * 1000;   // picks are forgotten after this long without a new tap, so the next visit starts fresh
+function loadPicks() {
+  try {
+    const p = JSON.parse(localStorage.getItem(PICKS_KEY) || "null");
+    if (p && Array.isArray(p.order) && Date.now() - p.at < PICKS_FORGET_MS) { if (!Array.isArray(p.played)) p.played = []; return p; }
+  } catch (e) {}
+  return { order: [], played: [], at: 0 };
+}
+const savePicks = () => { try { localStorage.setItem(PICKS_KEY, JSON.stringify(picks)); } catch (e) {} };
+let picks = loadPicks();
+(function readTag() {
+  const q = new URLSearchParams(location.search);
+  if (!q.has("pick") && !q.has("reset")) return;
+  if (q.has("reset")) picks = { order: [], played: [], at: 0 };
+  const n = parseInt(q.get("pick"), 10) - 1;
+  if (n >= 0 && n < OBJECTS.length) {
+    if (picks.order.length >= OBJECTS.length) picks = { order: [], played: [], at: 0 };   // all five were already picked: this tap starts a new round
+    if (!picks.order.includes(n)) picks.order.push(n);            // tapping the same object twice keeps its first place
+    picks.at = Date.now();
+  }
+  savePicks();
+  history.replaceState(null, "", location.pathname + location.hash);   // so a reload doesn't count the tap again
+})();
+addEventListener("storage", e => { if (e.key === PICKS_KEY) picks = loadPicks(); });   // a tap that opened another tab still counts here
+// the order of the dots: the objects in the order they were picked, then any not picked yet in DOT_ORDER
+const DOT_ORDER = [2, 4, 3, 5, 1];   // by slot: Photoframe (white), Doll/bear (mauve), Sweater (wine), Musicbox (purple), Flower (green)
+const pickedOrder = () => picks.order.concat(DOT_ORDER.map(n => n - 1).concat(OBJECTS.map((_, k) => k)).filter((k, i, all) => k >= 0 && k < OBJECTS.length && !picks.order.includes(k) && all.indexOf(k) === i));
+// the objects this visit plays, one after another: the picked ones in the order they were picked (those with a silhouette);
+// with no picks yet, every object that has one, in the order of the dots (DOT_ORDER)
+const playList = () => { const ready = k => !!OBJECTS[k].image, p = picks.order.filter(ready); return p.length ? p : pickedOrder().filter(ready); };
+const nextToPlay = (skip = -1) => playList().find(k => k !== skip && !picks.played.includes(k));
+// this page plays the object "Next" asked for (…/?play=5), or else the first one not played yet; once all are played, the last one again
+const askedFor = parseInt(new URLSearchParams(location.search).get("play"), 10) - 1;
+const CURRENT = OBJECTS[askedFor]?.image ? askedFor : nextToPlay() ?? playList()[playList().length - 1];
+const OBJ = OBJECTS[CURRENT];
+function markPlayed() { if (JUMP_LAYER > 1) return;   // a preview doesn't count as seen
+  if (!picks.played.includes(CURRENT)) picks.played.push(CURRENT); picks.at = Date.now(); savePicks(); }   // (the fresh time keeps it from being forgotten)
+// a colour so pale it would vanish into the white page (it gets a soft grey edge instead of a glow)
+const lightColour = c => { const v = parseInt(c.slice(1), 16); return ((v >> 16) * .299 + (v >> 8 & 255) * .587 + (v & 255) * .114) > 215; };
+const hexRGB = c => { const v = parseInt(c.slice(1), 16); return [v >> 16, v >> 8 & 255, v & 255]; };
+
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+let dpr = 1;
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+/* ───────────── the landing: dark ash that wipes clean to a white print of the bouquet ───────────── */
+const TOUCH_REACH = .33;    // how far around the cursor the silhouette's flakes react (1 = the earlier, wider reach)
+const BRUSH_R = 105;       // how wide a swipe clears, in px (a held mouse button clears wider)
+const COMPACT = .8;        // how big and soft each ash flake is on the first layer, so they merge into one compact, soft-focus shape (1 = loose grains)
+const FLAKE_SIZE = 1.45;    // how big the flakes on the first layer are (1 = as before; bigger softens the fine detail)
+const OUTLINE = 0;         // how bright the white glow around the bouquet's outline is (0 = none)
+const GREEN2_DIM = .72;    // how bright the green is on the second, grey layer, compared with the first (1 = the same, lower = dimmer)
+const GREEN_ALPHA = .6;    // how see-through the green ash is on the first layer (lower = more translucent, 1 = solid)
+const FLAT = .15;          // 0 keeps the bouquet's shading (3-D); 1 makes it a flat silhouette
+const MIST = 0;            // how far the bouquet's outline dissolves into mist (0 = crisp edge, 1 = very hazy)
+const MIST_SIZE = 2;      // how big each wisp of mist is; bigger = fewer, larger wisps = less work for the phone (1 = small and many)
+const BG_SIZE = 1.2;      // how big the grain, blotches and fog of the background are (1 = fine, 3 = very coarse)
+const ASH_SIZE = .6;      // how big the clumps and specks of pale ash on the background are, on every object (1 = the old size, lower = finer)
+const BG_SPEED = .35;      // how fast the background grain shimmers and its fog drifts (1 = the old speed, smaller = slower)
+const VEIL = .8;           // how thick the second, thinner layer of ash under a swipe is (0 = the paper shows straight away, 1 = solid)
+const GHOST = .22;         // how much of the bouquet stays on the paper after the burn, as a soft blur (0 = none, 1 = as strong as before)
+const KEEP = .75;          // how strongly the bouquet's ash silhouette stays after the burn (0 = burns away, 1 = unchanged)
+const SPREAD = .55;        // how far the silhouette's edges spread out on the white paper after the burn, as a share of the bouquet's width
+const BACKDROP2 = 0;       // the green fill, glow and halo behind the silhouette on the second layer (0 = none, just the flakes; 1 = as before)
+const FADE2 = .9;          // how solid the flakes stay as the first swipe burns them into the second layer (lower = they fizz pale and see-through as they burst apart; an object can set its own with fade2)
+const EDGE_BURST = 1;      // how hard the flakes around the outline are thrown outward as the first swipe burns through (0 = none; an object can set its own with edge)
+const FORM2 = 1;           // how much of the picture's own light and shade the flakes keep on the second layer, so the silhouette still has form (0 = one flat colour)
+const EDGE_SCATTER = 2.5;    // how loose and all over the place the silhouette's edge is on the second layer (0 = a soft, even spread)
+const FLAKE_GREEN = hexRGB(OBJ.flake ?? OBJ.colour);   // the colour of the silhouette's flakes on the second layer: the object's own colour
+const FLOAT = 14;           // how far the silhouette drifts as it floats, in px (0 = still)
+const FLOAT_TIME = 7;       // seconds for one slow rise and fall
+const FIRE = 0;            // the burning look when the silhouette is swiped through: ember line, char, scorch, glowing flakes (0 = none, 1 = full fire)
+const ASH_LAYER1 = 1;      // how thickly ash covers the white on the first layer (0 = clean white, 1 = thick)
+const ASH_LAYER2 = .21;    // ...on the second layer (the third has only the corners); .21 looks halfway between the first and third, since the ash greys the page fast at first and then levels off
+const CORNER_ASH = .75;    // how much grey ash gathers in the corners of the final white screen (0 = none, 1 = heavy)
+const GLOW1 = 0;           // how strongly the bouquet glows sage green on the first, dark layer (0 = no glow)
+const GLOW = .5;           // how strongly the silhouette glows green in the second, grey phase (0 = no glow)
+const GREEN_DELAY = 1.5;    // seconds after the page opens before the green glow starts to appear
+const GREEN_FADE = 4;      // seconds the green takes to fade in fully
+const GREEN2 = 0;          // how strongly the silhouette glows sage green on the second, grey layer (0 = no glow)
+const HALO_GLOW = .3;      // how bright the soft glow in the silhouette's own colours is (0 = none)
+const PARTICLE_SCALE = .65; // how big every flake is, on every layer and object (1 = the earlier size, lower = smaller)
+const DETAIL = 0;          // how strongly the picture itself shows through beneath the flakes on the first layer, so its details read (0 = flakes only, 1 = the full picture)
+const DETAIL_SOFT = .5;    // how sharp that picture is (1 = full sharpness, lower = softer)
+const HALO = 0;            // how far past the outline the mist and stray ash reach (0 = none, 1.5 = very far)
+const SCATTER = .35;       // how hard a touch throws the flakes about (1 = the earlier, wilder setting)
+const IDLE_MOTION = 5;     // how much the untouched bouquet sways and breathes, in px
+const CLEAN_AT = .6;       // once this share of the screen is clear, the rest clears by itself
+const SWIPE_THROUGH = .5;  // one swipe across this share of the bouquet's width is enough: the ash then clears by itself
+const GATHER_SLOW = 1;     // how slowly the flakes fly in and form the silhouette when the page opens (1 = the earlier speed, higher = slower)
+const ARRIVE_SMALL = .1;   // how big each flake is while it flies in from off the screen, as a share of its full size (it grows as it reaches its place; 1 = full size all the way)
+const AUTO_CLEAN_MS = 3200; // how long the ash takes to clear by itself, spreading out from the swipe
+const land = document.getElementById("ash");
+const hint = document.getElementById("hint");
+const words = document.getElementById("words");
+const objectsEl = document.getElementById("objects");
+let objectsShown = false;
+const nextBtn = document.getElementById("next");
+let lastOfRound = false;   // set when the dots appear: this is the round's last object
+// the closing, after "Next" on the last object: the five dots come back all grey, then fade, and "It's time to begin again." takes their place
+function showEnding() {
+  nextBtn.classList.remove("show"); nextBtn.tabIndex = -1;
+  objectsEl.classList.add("gone");                                         // this object's dots fade out...
+  setTimeout(() => {
+    objectsEl.querySelectorAll("span").forEach(d => d.classList.add("burnt", "done"));
+    objectsEl.classList.remove("gone");                                    // ...and return, every one of them grey
+    setTimeout(() => {
+      objectsEl.classList.add("gone");
+      document.getElementById("ending").classList.add("show");
+      if (!PREVIEW_END && JUMP_LAYER === 1) { picks = { order: [], played: [], at: 0 }; savePicks(); }   // the round is over: the next visit starts afresh
+    }, ENDING_FADE_MS + ENDING_AFTER_MS);
+  }, ENDING_FADE_MS);
+}
+nextBtn.addEventListener("click", () => {   // the page starts again on the next object
+  markPlayed();
+  if (lastOfRound) { showEnding(); return; }
+  // the next picked object not seen yet; once all have been seen, simply the one after this in the order (round to the first again)
+  const list = playList(), n = nextToPlay(CURRENT) ?? list[(list.indexOf(CURRENT) + 1) % list.length];
+  location.href = location.pathname + (n !== undefined ? "?play=" + (n + 1) : "") + location.hash;
+});
+const WORD_FONT = 'Menlo, Consolas, "DejaVu Sans Mono", monospace';   // the ash words' typeface (the same as the rest of the page)
+const WORD_DARK = .62;     // how dark the ash words are on the grey (1 = as dark as the first layer's ash)
+const WORD_FX = 480;                           // how many flakes and embers fly in to form the word (0 = none)
+const WORD_SIZE = [19, 3.5, 35];                // the word's size in px: [smallest, % of the screen's shorter side, largest]
+let agl = land.getContext("webgl", { premultipliedAlpha: true, alpha: false, antialias: false });
+let picture = null;        // a canvas holding the bouquet
+let N = 0;                 // how many particles
+let X, Y, VX, VY, HU, HV, HX, HY, RATE, WAIT, SEED, OP, SX, SY, GR;   // SX, SY: where each flake drifts to after the burn   // OP: how opaque each flake is (faint at the misty edge)
+let dyn, dynBuf, statBuf, colBuf, quadBuf, maskTex, printTex, wordsTex, glowTex, detailTex;
+let bgP, ptP, U = {};      // the two shader programs and their uniforms
+let builtW = 1;            // width of the bouquet when the particles were made (their size follows it)
+// preview: …?play=5&layer=2 (or 3) skips straight to that layer of that object, for checking a detail without swiping
+const JUMP_LAYER = Math.min(3, Math.max(1, parseInt(new URLSearchParams(location.search).get("layer"), 10) || 1));
+const PREVIEW_END = new URLSearchParams(location.search).has("end");   // …&end previews the closing (all-grey dots, then "It's time to begin again.") on any object
+let jumpedTo = 1;
+let formed = 0;            // how fully the flakes have gathered (0 to 1)
+const SETTLE_MS = 1000;    // after the silhouette has fully formed, how long it settles before it reacts to touch, in milliseconds
+let formedAt = 0, live = false;   // when it finished forming; whether it reacts to touch yet (nothing does until then: no scattering, no swipe, no hint)
+let landStart = 0, swiped = false, through = 0, originX = 0, originY = 0, hinted = false, cleanShare = 0, finishAt = 0, stage = 1, stageAt = 0;
+const MS = 4;              // the clean-mask is drawn at a quarter of the screen's size
+const mask = document.createElement("canvas");
+const mctx = mask.getContext("2d", { willReadFrequently: true });
+let maskDirty = true, lastCount = 0;
+
+const GLSL_NOISE = `
+  float hash(vec2 p){ vec3 q = fract(p.xyx * .1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
+  float noise(vec2 p){
+    vec2 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f);
+    return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
+  }
+  float fbm(vec2 p){ float v = 0., a = .5; for (int i = 0; i < 4; i++){ v += a * noise(p); p *= 2.03; a *= .5; } return v; }
+  // 0 = still under ash, 1 = wiped clean; the edge is ragged and grainy like smeared soot.
+  // once the bouquet has been swiped, the clearing spreads out from that spot by itself (uFinish 0 to 1)
+  float spreadAt(vec2 px){
+    float d = distance(px, uOrigin) + (fbm(px * .006 + 11.) - .5) * 260.;
+    return uFinish > 0. ? clamp((uFinish * uReach - d) / 300., 0., 1.) : 0.;   // nothing burns before a burn has started
+  }
+  // where a swipe has brushed off the top layer of ash (the burn not counted)
+  float wipedAt(vec2 px, float m, float grain){
+    return smoothstep(.22, .62, m + (fbm(px * .045) - .5) * .42 + (grain - .5) * .22);
+  }
+  float cleanAt(vec2 px, float m, float grain){
+    return smoothstep(.22, .62, m + spreadAt(px) * 1.3 + (fbm(px * .045) - .5) * .42 + (grain - .5) * .22);
+  }
+  // how far the self-clearing has burnt through here: the bouquet goes exactly where the dark ash goes
+  float goneAt(vec2 px, float grain){
+    float sp = spreadAt(px);
+    return smoothstep(.22, .62, sp * 1.3 + (fbm(px * .045) - .5) * .42 + (grain - .5) * .22) * min(1., sp * 8.);
+  }`;
+
+if (agl) {
+  const sh = (type, src) => {
+    const s = agl.createShader(type); agl.shaderSource(s, src); agl.compileShader(s);
+    if (!agl.getShaderParameter(s, agl.COMPILE_STATUS)) console.warn("landing shader:", agl.getShaderInfoLog(s));
+    return s;
+  };
+  const program = (vs, fs, attrs) => {
+    const p = agl.createProgram();
+    agl.attachShader(p, sh(agl.VERTEX_SHADER, vs));
+    agl.attachShader(p, sh(agl.FRAGMENT_SHADER, fs));
+    attrs.forEach((a, i) => agl.bindAttribLocation(p, i, a));
+    agl.linkProgram(p);
+    return agl.getProgramParameter(p, agl.LINK_STATUS) ? p : null;
+  };
+
+  // the ground: dark grainy ash, and beneath it white paper with a soft grey print of the bouquet
+  bgP = program("attribute vec2 a; void main(){ gl_Position = vec4(a, 0., 1.); }", `
+    precision highp float;
+    uniform sampler2D uMask, uPrint, uWords, uGlow, uDetail;
+    uniform vec3 uSpin;         // the float's tilt (radians) and the point it turns about (px)
+    uniform vec2 uRes;            // css px
+    uniform vec4 uBox;            // where the print sits: x, y (from the top), w, h in css px
+    uniform float uTime, uFinish, uDpr;
+    uniform vec2 uOrigin;
+    uniform float uReach;
+    uniform float uStage;       // 1 = the dark ash, 2 = the grey layer
+    uniform float uForm;        // how fully the flakes have gathered into the silhouette (0 to 1): its coloured haze fades in with them
+    uniform float uGreen;       // the green glow fading in as the page opens (0 to 1)
+    ${GLSL_NOISE}
+    void main(){
+      vec2 px = gl_FragCoord.xy / uDpr;                     // css px, from the bottom
+      vec2 uv = px / uRes;
+      // film grain in soft-edged clumps, shimmering slowly: each frame of grain fades into the next
+      float gt = uTime * 12. * ${BG_SPEED.toFixed(3)}, gf = floor(gt), gk = smoothstep(0., 1., gt - gf);
+      vec2 gp = px / (1.1 * ${BG_SIZE.toFixed(2)});
+      vec2 g0 = gp + mod(gf, 61.) * vec2(17., 31.), g1 = gp + mod(gf + 1., 61.) * vec2(17., 31.);
+      float grain = mix(mix(hash(floor(g0)), noise(g0), .7), mix(hash(floor(g1)), noise(g1), .7), gk);   // film grain, shimmering
+      grain = clamp(.5 + (grain - .5) / sqrt(gk * gk + (1. - gk) * (1. - gk)), 0., 1.);   // keep its contrast steady while one frame fades into the next (no pulsing)
+      float maskV = texture2D(uMask, uv).r;
+      float clean = cleanAt(px, maskV, grain);
+      float wiped = wipedAt(px, maskV, grain);
+
+      // ash: near-black, mottled, thick with grain
+      float mott = fbm(px * (.006 / ${BG_SIZE.toFixed(2)}) + 3.1);
+      vec3 ash = vec3(.03 + .07 * mott + .13 * grain * grain);
+      // slow drifting mist over everything
+      vec2 fp = px / ${BG_SIZE.toFixed(2)};
+      float ft = uTime * ${BG_SPEED.toFixed(3)};
+      float fog = fbm(fp * .0024 + vec2(ft * .018, -ft * .011)) * fbm(fp * .006 - vec2(ft * .01, 0.) + 7.);
+
+      // paper: white, a little uneven, darker toward the corners, still grainy
+      vec2 pv = (vec2(px.x, uRes.y - px.y) - uBox.xy) / uBox.zw;
+      float ink = all(greaterThan(pv, vec2(0.))) && all(lessThan(pv, vec2(1.))) ? 1.15 * texture2D(uPrint, vec2(pv.x, 1. - pv.y)).r : 0.;
+      float inkS = ink;                             // the bouquet's own shape, before anything burns
+      float gA = goneAt(px, grain);                 // the burn under way now
+      bool two = uStage > 1.5;
+      float gone = two ? 1. : gA;                   // the first burn (done, once on the grey layer)
+      float gone2 = two ? gA : 0.;                  // the second burn, through the grey
+      float wiped2 = two ? wiped : 0.;              // swipes on the grey layer
+      wiped = two ? 0. : wiped;
+      // once burnt, only a faint, softly spread ghost of the bouquet is left on the paper
+      float ghost = 0., halo = 0.;
+      if (all(greaterThan(pv, vec2(-.25))) && all(lessThan(pv, vec2(1.25)))) {   // only near the bouquet
+        vec2 c = vec2(pv.x, 1. - pv.y);
+        for (int k = 0; k < 8; k++) {
+          float a = float(k) * .785 + .4;
+          float near = texture2D(uPrint, c + vec2(cos(a), sin(a)) * vec2(.08, .05)).r;
+          float far = texture2D(uPrint, c + vec2(cos(a + .39), sin(a + .39)) * vec2(.16, .1)).r;
+          ghost += near + far; halo += far;
+        }
+        ghost *= 1.15 / 16.; halo *= 1.15 / 8.;
+      }
+      float pale = smoothstep(.08, .95, ink) * gone;   // after the burn the bouquet stays as a pale shape with a firm edge (no glow around it)
+      ink *= 1. - gone;
+      // the ground on every layer: a plain white screen (only the faintest grain)
+      vec3 white = vec3(.975 + (grain - .5) * .02);
+      // ...with grey ash gathered in its corners, ragged and grainy, thinning toward the middle
+      vec2 cq = abs(uv - .5) * 2.;                                       // 0 at the centre, 1 at the edges
+      float corner = length(cq) / 1.414;                                 // 1 only in the very corners
+      corner += (fbm(px * (.006 / ${ASH_SIZE.toFixed(2)}) + 61.) - .5) * .32 + (fbm(px * (.03 / ${ASH_SIZE.toFixed(2)}) + 7.) - .5) * .1;
+      // how thickly ash lies over the white: heaviest on the first layer, less on the second, only the corners on the third
+      float cover = mix(mix(${ASH_LAYER1.toFixed(2)}, ${ASH_LAYER2.toFixed(2)}, gone), 0., gone2);
+      corner += cover * .55;                                             // the corner ash creeps further in
+      float soot = smoothstep(.6 - .3 * cover, 1.02, corner) * mix(${CORNER_ASH.toFixed(2)}, .95, cover);
+      float fleck = step(.86, hash(floor(px / (2. * ${ASH_SIZE.toFixed(2)})) + 5.)) * smoothstep(.5, .9, corner);   // loose specks just inside it
+      vec3 cornerAsh = vec3(.5 + .16 * fbm(px * (.02 / ${ASH_SIZE.toFixed(2)}) + 3.) + .16 * (grain - .5));
+      cornerAsh = mix(cornerAsh, vec3(.7 + .14 * fbm(px * (.02 / ${ASH_SIZE.toFixed(2)}) + 3.) + .14 * (grain - .5)), cover * .7);   // thick ash stays pale, never dark
+      white = mix(white, cornerAsh, soot);
+      white = mix(white, vec3(.6), fleck * .35 * ${CORNER_ASH.toFixed(2)});
+      // ...and a pale, mottled layer of ash dusted over the whole page (greyish white, never black)
+      float drift = fbm(px * (.0035 / ${ASH_SIZE.toFixed(2)}) + 80.) * .65 + fbm(px * (.018 / ${ASH_SIZE.toFixed(2)}) + 12.) * .35;
+      float dust = cover * clamp(.3 + .75 * drift + (grain - .5) * .25, 0., 1.);
+      vec3 paleAsh = vec3(.79 + .12 * fbm(px * (.01 / ${ASH_SIZE.toFixed(2)}) + 44.) + .12 * (grain - .5));
+      white = mix(white, paleAsh, dust * .85);
+      white = mix(white, vec3(.66), step(.9, hash(floor(px / (2. * ${ASH_SIZE.toFixed(2)})) + 31.)) * cover * .3);   // loose specks in it
+      ash = white;                                  // the first layer is the same white
+      // the second phase: the same white too
+      float gm = fbm(px * (.006 / ${BG_SIZE.toFixed(2)}) + 9.3);
+      float paper = .4 + .1 * gm + .16 * grain * grain;
+      paper -= .1 * smoothstep(.45, 1.25, length((uv - .5) * vec2(uRes.x / uRes.y, 1.)) * 1.3);
+      vec3 print = white;
+      print = mix(print, vec3(${FLAKE_GREEN.map(v => (v / 255).toFixed(3)).join(', ')}) * ${GREEN2_DIM.toFixed(2)}, pale * .5 * ${BACKDROP2.toFixed(2)});   // the silhouette's fill: the first layer's green, dimmed
+
+      // a grey smear of soot left along the edge of what's been wiped
+      float rim = clean * (1. - clean) * 4.;
+      // a swipe only brushes off the top layer: beneath lies a thinner, paler veil of ash with glimpses of the paper through it
+      float grain2 = hash(floor(px / (1.4 * ${BG_SIZE.toFixed(2)})) + 77.);
+      float mott2 = fbm(px * .011 + 40.);
+      vec3 veilAsh = vec3(.07 + .11 * mott2 + .12 * grain2 * grain2) + .08 * fog;
+      float veilA = clamp(${VEIL.toFixed(2)} * (1. + .75 * (fbm(px * .009 + 20.) - .5) + .2 * (grain2 - .5)), 0., 1.);   // thinner in patches
+      vec3 under = mix(print, veilAsh, veilA);
+      vec3 col = mix(mix(ash, under, wiped), print, gone);     // the burn takes both layers away
+      rim = wiped * (1. - wiped) * 4. * (1. - gone);
+      col = mix(col, vec3(.3 + .1 * grain), rim * .28);
+
+      col = mix(mix(col, white, wiped2), white, gone2);
+      col = mix(col, vec3(.52 + .1 * grain), wiped2 * (1. - wiped2) * 4. * (1. - gone2) * .25);
+
+      // the word: plain letters that appear where the first burn passes
+      // each word floats on its own slow drift, like the silhouette
+      float wid = floor(texture2D(uWords, uv).g * 255. / 40. + .5);
+      float ww = 6.2832 / ${FLOAT_TIME.toFixed(2)};
+      vec2 wf = wid > .5 ? vec2(${(FLOAT * .5).toFixed(2)} * sin(uTime * ww * .7 + wid * 2.1) + ${(FLOAT * .15).toFixed(2)} * sin(uTime * ww * 1.6 + wid),
+                                ${(FLOAT * .7).toFixed(2)} * sin(uTime * ww * (.9 + .08 * wid) + wid * 1.7)) : vec2(0.);
+      float letters = texture2D(uWords, (px - wf) / uRes).r;   // clean, solid letters
+      vec3 ashLeft = vec3(.2);
+      col = mix(col, ashLeft, letters * gone * (1. - gone2) * ${WORD_DARK.toFixed(2)});
+
+      // the self-clearing burns: charred ash ahead of a flickering ember line, a brown scorch left behind on the paper
+      float sp = spreadAt(px);
+      float edge = gA * (1. - gA) * 4.;
+      float flick = .65 + .7 * noise(px * .07 + vec2(0., -uTime * 6.)) * noise(px * .021 + uTime * 1.3);
+      float ember = pow(edge, 1.6) * flick;
+      float scorch = gA * (1. - smoothstep(.45, 1., sp));
+      float charred = (1. - gA) * smoothstep(0., .2, sp);
+      col *= 1. - .45 * charred * ${FIRE.toFixed(2)};
+      col = mix(col, vec3(.42, .27, .15) * (.8 + .4 * grain), scorch * .55 * ${FIRE.toFixed(2)});
+      col = mix(col, vec3(1., .42, .1), clamp(ember * .95, 0., 1.) * ${FIRE.toFixed(2)});
+      col += vec3(1., .78, .45) * pow(edge, 6.) * flick * .55 * ${FIRE.toFixed(2)};       // the hot core of the line
+      // what is left of the bouquet glows a faint green, breathing slowly
+      float breath = .85 + .15 * sin(uTime * 1.2);
+      float aura = smoothstep(.0, .5, halo * .5 + ghost * .7) * (1. - .6 * smoothstep(.35, .9, ghost));   // hugs the shape, fading outward; dimmer at its heart
+      col += vec3(${FLAKE_GREEN.map(v => (v / 255).toFixed(3)).join(', ')}) * aura * gone * (1. - .45 * max(wiped2, gone2)) * ${GREEN2.toFixed(2)} * ${BACKDROP2.toFixed(2)} * uGreen * breath;   // the same sage glow on the grey layer
+      // on the dark layer, a soft sage-green glow (the flakes' own colour) around the bouquet
+      col += vec3(${FLAKE_GREEN.map(v => (v / 255).toFixed(3)).join(', ')}) * aura * (1. - gone) * ${GLOW1.toFixed(2)} * uGreen * breath;
+      // a soft halo in the silhouette's own colours, fading out around it (on the dark and the grey layers)
+      vec4 gw = all(greaterThan(pv, vec2(0.))) && all(lessThan(pv, vec2(1.))) ? texture2D(uGlow, vec2(pv.x, 1. - pv.y)) : vec4(0.);
+      gw.a *= smoothstep(0., .12, min(min(pv.x, 1. - pv.x), min(pv.y, 1. - pv.y)));   // fade out before the edges of its box, so no straight edge ever shows
+      col = mix(col, gw.rgb, clamp(pow(gw.a, .6) * ${HALO_GLOW.toFixed(2)} * uForm * mix(1. - gone, (1. - gone2) * .6 * ${BACKDROP2.toFixed(2)}, gone) * (.94 + .06 * sin(uTime * 1.2)), 0., 1.));   // tinted, on the white
+      // the picture itself, faintly, beneath the flakes: its chains, flower and bindings show through the gaps (first layer only), tilting with the float
+      vec2 sq = vec2(px.x, uRes.y - px.y) - uSpin.yz;
+      float sc = cos(uSpin.x), ss = sin(uSpin.x);
+      vec2 dv = (uSpin.yz + vec2(sq.x * sc + sq.y * ss, -sq.x * ss + sq.y * sc) - uBox.xy) / uBox.zw;
+      vec4 dt = all(greaterThan(dv, vec2(0.))) && all(lessThan(dv, vec2(1.))) ? texture2D(uDetail, vec2(dv.x, 1. - dv.y)) : vec4(0.);
+      col = mix(col, dt.rgb, dt.a * ${DETAIL.toFixed(2)} * (1. - gone) * uGreen);
+      gl_FragColor = vec4(col, 1.);
+    }`, ["a"]);
+
+  // the particles: ash flakes that gather into the bouquet; pale on the dark ash, soot-dark on the white paper
+  ptP = program(`
+    attribute vec4 aDyn;       // x, y in css px, opacity, size (small while flying in, 1 once in place)
+    attribute vec3 aStat;      // grey tone, size in css px, a random seed
+    attribute vec3 aCol;       // the picture's colour where the flake sits
+    varying vec3 vCol;
+    uniform vec2 uRes;
+    uniform float uScale;
+    varying float vTone, vAlpha, vSeed, vSize, vPuff;
+    uniform float uStage, uFinish;
+    void main(){
+      gl_Position = vec4(aDyn.x / uRes.x * 2. - 1., 1. - aDyn.y / uRes.y * 2., 0., 1.);
+      // about a third of the flakes are loose puffs of mist; the rest are soft dots
+      vPuff = step(fract(aStat.z * 13.7), .32);
+      float compact = uStage > 1.5 ? 1. : mix(${(COMPACT * FLAKE_SIZE).toFixed(2)}, 1., uFinish);
+      gl_PointSize = vSize = max(1., aStat.y * uScale * mix(2.2, 5., vPuff) * compact * aDyn.w * ${(PARTICLE_SCALE * (OBJ.flakeSize ?? 1)).toFixed(3)});
+      vTone = aStat.x; vAlpha = aDyn.z; vSeed = aStat.z; vCol = aCol;
+    }`, `
+    precision highp float;
+    uniform sampler2D uMask;
+    uniform vec2 uRes;
+    uniform float uFinish, uDpr, uTime;
+    uniform vec2 uOrigin;
+    uniform float uReach;
+    uniform float uStage;       // 1 = the dark ash, 2 = the grey layer
+    uniform float uGreen;       // the green glow fading in as the page opens (0 to 1)
+    varying vec3 vCol;
+    varying float vTone, vAlpha, vSeed, vSize, vPuff;
+    ${GLSL_NOISE}
+    void main(){
+      vec2 q = gl_PointCoord - .5;
+      float a = vSeed * 6.283, c = cos(a), s = sin(a);
+      q = vec2(c * q.x - s * q.y, (s * q.x + c * q.y) * (1.1 + .5 * fract(vSeed * 7.31)));
+      float r = length(q) * 2. + .12 * sin(atan(q.y, q.x) * 3. + vSeed * 40.);
+      // somewhere between fog and a dot: a small grainy core inside a soft haze
+      float haze = exp(-r * r * 3.2) * (1. - smoothstep(.85, 1., r));
+      float core = 1. - smoothstep(.12, .42, r);
+      float shape = mix(core * .32 + haze * .55, haze * .3, vPuff);
+      shape = mix(1., shape, smoothstep(2., 5., vSize));
+      vec2 px = gl_FragCoord.xy / uDpr;
+      float clean = cleanAt(px, texture2D(uMask, px / uRes).r, fract(vSeed * 91.7));
+      float mk = texture2D(uMask, px / uRes).r, gs = fract(vSeed * 91.7);
+      bool two = uStage > 1.5;
+      float gA = goneAt(px, gs);
+      float g = two ? 1. : gA, g2 = two ? gA : 0.;          // first burn, second burn
+      float w2 = two ? wipedAt(px, mk, gs) : 0.;          // swiped on the grey layer
+      float onPaper = two ? 1. : max(wipedAt(px, mk, gs) * (1. - ${VEIL.toFixed(2)}), gA);
+      float tone = mix(.3 + .62 * vTone, .1 + .42 * vTone, onPaper);
+      // caught by the burning edge: the flake glows like an ember, then is gone with the dark ash
+      // the first layer, in the manner of a soft-focus photograph: smooth, solid blobs that merge into one compact shape
+      float blob = exp(-r * r * 2.4) * (1. - smoothstep(.9, 1., r));
+      shape = mix(shape, blob * ${GREEN_ALPHA.toFixed(2)}, (1. - g));   // see-through: the dark shows through the green
+      shape = mix(shape, haze * .6, smoothstep(.5, 1., g) * .5);   // after the burn: softer, but keeping some of its grain
+      float gl = two ? g2 : g;
+      float lit = smoothstep(0., .3, gl) * (1. - smoothstep(.55, 1., gl)) * ${FIRE.toFixed(2)};
+      vec3 colr = vec3(tone);
+      colr = mix(colr, vCol, (1. - g) * (1. - onPaper));   // on the dark: each flake in the picture's own colour   // one colour on the dark: sage green, fading in as the page opens
+      colr = mix(colr, vec3(${FLAKE_GREEN.map(v => (v / 255).toFixed(3)).join(', ')}) * ${GREEN2_DIM.toFixed(2)} * mix(.9 + .2 * vTone, .35 + 1.2 * vTone, ${FORM2.toFixed(2)}), smoothstep(.6, 1., g));   // ...shaded by the picture, so it keeps its form   // on the grey the leftover flakes are the same green, dimmed
+      colr = mix(colr, vec3(.42, .46, .44), max(w2 * .85, smoothstep(.5, 1., g2)));   // on the white third layer: soft grey
+      colr = mix(colr, vec3(1., .5 + .25 * fract(vSeed * 17.3), .15) * 1.25, lit);     // caught by a burning edge
+      float m = shape * vAlpha * mix(.95, .55, two ? 1. : clean) *   // (on the grey layer, held where the first burn left it: no jump)
+        mix(1., ${(KEEP * (OBJ.fade2 ?? FADE2)).toFixed(2)}, smoothstep(.5, 1., g)) * (1. - smoothstep(.5, 1., g2)) * (1. + .6 * lit);   // the first burn leaves a fainter silhouette; the second takes it all
+      gl_FragColor = vec4(colr * m, m);
+    }`, ["aDyn", "aStat", "aCol"]);
+
+  if (!bgP || !ptP) { console.warn("landing shaders failed to build"); agl = null; }
+  else {
+    for (const [p, names] of [[bgP, ["uMask", "uPrint", "uWords", "uGlow", "uDetail", "uSpin", "uRes", "uBox", "uTime", "uFinish", "uDpr", "uOrigin", "uReach", "uStage", "uGreen", "uForm"]],
+                              [ptP, ["uMask", "uRes", "uScale", "uFinish", "uDpr", "uTime", "uOrigin", "uReach", "uStage", "uGreen"]]]) {
+      U[p === bgP ? "bg" : "pt"] = Object.fromEntries(names.map(n => [n, agl.getUniformLocation(p, n)]));
+    }
+    quadBuf = agl.createBuffer();
+    agl.bindBuffer(agl.ARRAY_BUFFER, quadBuf);
+    agl.bufferData(agl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), agl.STATIC_DRAW);
+    dynBuf = agl.createBuffer();
+    statBuf = agl.createBuffer();
+    colBuf = agl.createBuffer();
+    const texture = unit => {
+      const t = agl.createTexture();
+      agl.activeTexture(agl.TEXTURE0 + unit);
+      agl.bindTexture(agl.TEXTURE_2D, t);
+      for (const [k, v] of [[agl.TEXTURE_MIN_FILTER, agl.LINEAR], [agl.TEXTURE_MAG_FILTER, agl.LINEAR],
+                            [agl.TEXTURE_WRAP_S, agl.CLAMP_TO_EDGE], [agl.TEXTURE_WRAP_T, agl.CLAMP_TO_EDGE]]) agl.texParameteri(agl.TEXTURE_2D, k, v);
+      return t;
+    };
+    maskTex = texture(0);
+    printTex = texture(1);
+    wordsTex = texture(2);
+    glowTex = texture(3);
+    detailTex = texture(4);
+    agl.pixelStorei(agl.UNPACK_FLIP_Y_WEBGL, true);
+    agl.blendFunc(agl.ONE, agl.ONE_MINUS_SRC_ALPHA);
+  }
+}
+if (!agl) land.style.display = "none";
+
+function loadPicture() {
+  return new Promise(done => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement("canvas");
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      c.getContext("2d").drawImage(img, 0, 0);
+      done(c);
+    };
+    img.onerror = () => { console.warn("silhouette image failed to load"); done(null); };
+    img.src = OBJ.image;
+  });
+}
+
+// where the bouquet sits on screen
+function pictureBox() {
+  const phone = innerHeight > innerWidth * 1.15;          // an upright phone: use more of the narrow width
+  const k = Math.min(innerWidth * (phone ? .86 : .8) / picture.width, Math.min(innerHeight * (phone ? .62 : .76), 780) / picture.height);
+  const w = picture.width * k * (OBJ.size ?? 1), h = picture.height * k * (OBJ.size ?? 1);
+  return { x: (innerWidth - w) / 2, y: (innerHeight - h) / 2, w, h };
+}
+// the soft print reaches past the bouquet's outline, like light bleeding round an object on photo paper
+const PL = .35 + .3 * HALO, PT = .18 + .1 * HALO;     // how far the print reaches past the bouquet, as a share of its width / height
+const printBox = b => ({ x: b.x - b.w * PL, y: b.y - b.h * PT, w: b.w * (1 + 2 * PL), h: b.h * (1 + 2 * PT) });
+
+// The print: a heavily blurred grey shadow of the bouquet (darker where the bouquet is darker).
+// The glow: the silhouette in its own colours, blurred far past its outline (like light bleeding from a coloured lamp)
+function makeGlow() {
+  const pw = 160, ph = Math.round(pw * (1 + 2 * PT) / (1 + 2 * PL) * picture.height / picture.width);
+  const a = document.createElement("canvas"), g = a.getContext("2d");
+  a.width = pw; a.height = ph;
+  g.drawImage(picture, pw * PL / (1 + 2 * PL), ph * PT / (1 + 2 * PT), pw / (1 + 2 * PL), ph / (1 + 2 * PT));
+  let src = a;
+  for (const s of [.09, .3, .05, .2, .08, .4, 1]) {
+    const c = document.createElement("canvas");
+    c.width = Math.max(2, Math.round(pw * s)); c.height = Math.max(2, Math.round(ph * s));
+    const cg = c.getContext("2d");
+    cg.imageSmoothingQuality = "high";
+    cg.drawImage(src, 0, 0, c.width, c.height);
+    src = c;
+  }
+  agl.activeTexture(agl.TEXTURE3);
+  agl.bindTexture(agl.TEXTURE_2D, glowTex);
+  agl.texImage2D(agl.TEXTURE_2D, 0, agl.RGBA, agl.RGBA, agl.UNSIGNED_BYTE, src);
+}
+
+// the picture at DETAIL_SOFT sharpness, laid out like the glow (same margins), for the faint copy beneath the flakes
+function makeDetail() {
+  const pw = Math.min(1400, Math.round(picture.width * (1 + 2 * PL) * DETAIL_SOFT)), ph = Math.round(pw * (1 + 2 * PT) / (1 + 2 * PL) * picture.height / picture.width);
+  const a = document.createElement("canvas"), g = a.getContext("2d");
+  a.width = pw; a.height = ph;
+  g.imageSmoothingQuality = "high";
+  g.drawImage(picture, pw * PL / (1 + 2 * PL), ph * PT / (1 + 2 * PT), pw / (1 + 2 * PL), ph / (1 + 2 * PT));
+  agl.activeTexture(agl.TEXTURE4);
+  agl.bindTexture(agl.TEXTURE_2D, detailTex);
+  agl.texImage2D(agl.TEXTURE_2D, 0, agl.RGBA, agl.RGBA, agl.UNSIGNED_BYTE, a);
+}
+
+function makePrint() {
+  const pw = 128, ph = Math.round(128 * (1 + 2 * PT) / (1 + 2 * PL) * picture.height / picture.width);
+  const a = document.createElement("canvas"), g = a.getContext("2d", { willReadFrequently: true });
+  a.width = pw; a.height = ph;
+  g.drawImage(picture, pw * PL / (1 + 2 * PL), ph * PT / (1 + 2 * PT), pw / (1 + 2 * PL), ph / (1 + 2 * PT));
+  const im = g.getImageData(0, 0, pw, ph), d = im.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const v = d[i + 3] / 255 * (.85 + .15 * (1 - (OBJ.flat ?? FLAT)) * (1 - d[i] / 255)) * 255;
+    d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+  }
+  g.putImageData(im, 0, 0);
+  // blur by shrinking and growing again, a few times over
+  let src = a;
+  for (const s of [.1, .3, .06, .22, 1]) {
+    const c = document.createElement("canvas");
+    c.width = Math.max(2, Math.round(pw * s)); c.height = Math.max(2, Math.round(ph * s));
+    const cg = c.getContext("2d");
+    cg.fillStyle = "#000"; cg.fillRect(0, 0, c.width, c.height);
+    cg.imageSmoothingQuality = "high";
+    cg.drawImage(src, 0, 0, c.width, c.height);
+    src = c;
+  }
+  agl.activeTexture(agl.TEXTURE1);
+  agl.bindTexture(agl.TEXTURE_2D, printTex);
+  agl.texImage2D(agl.TEXTURE_2D, 0, agl.RGBA, agl.RGBA, agl.UNSIGNED_BYTE, src);
+}
+
+// Turn the bouquet into particles: denser and paler where it is brighter.
+function buildAsh() {
+  const mist = OBJ.mist ?? MIST;   // this object's own mist, if it has one
+  // sample the bouquet with a margin round it, so mist can gather past its outline
+  const box = pictureBox(), bw = Math.max(2, Math.round(box.w)), bh = Math.max(2, Math.round(box.h));
+  const mx = Math.round(bw * (.14 + .4 * HALO)), my = Math.round(bh * (.07 + .14 * HALO)), w = bw + mx * 2, h = bh + my * 2;
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const g = c.getContext("2d", { willReadFrequently: true });
+  g.drawImage(picture, mx, my, bw, bh);
+  const px = g.getImageData(0, 0, w, h).data;
+  // a heavily blurred copy of the outline: 1 deep inside the bouquet, fading to 0 well outside it
+  let blur = c;
+  for (const k of [1 / (4 + 6 * mist), 1, 1 / (3 + 5 * mist), 1]) {
+    const b = document.createElement("canvas");
+    b.width = Math.max(2, Math.round(w * k)); b.height = Math.max(2, Math.round(h * k));
+    const bg = b.getContext("2d", { willReadFrequently: true });
+    bg.imageSmoothingQuality = "high";
+    bg.drawImage(blur, 0, 0, b.width, b.height);
+    blur = b;
+  }
+  const soft = blur.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, w, h).data;
+  // a far wider blur, for the haze that hangs well beyond the outline
+  let far = c;
+  for (const k of [1 / 28, 1, 1 / 14, 1]) {
+    const b = document.createElement("canvas");
+    b.width = Math.max(2, Math.round(w * k)); b.height = Math.max(2, Math.round(h * k));
+    const bg = b.getContext("2d", { willReadFrequently: true });
+    bg.imageSmoothingQuality = "high";
+    bg.drawImage(far, 0, 0, b.width, b.height);
+    far = b;
+  }
+  const wide = far.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, w, h).data;
+  let wideMax = 1;
+  for (let k = 3; k < wide.length; k += 4) if (wide[k] > wideMax) wideMax = wide[k];
+  const there = k => px[k + 3] / 255;
+  const light = k => (.3 * px[k] + .59 * px[k + 1] + .11 * px[k + 2]) / 255;
+  let lo = 1, hi = 0;
+  for (let k = 0; k < px.length; k += 4) if (there(k) > .5) { const l = light(k); if (l < lo) lo = l; if (l > hi) hi = l; }
+  const tone = k => .62 + ((hi - lo < .08 ? .75 : (light(k) - lo) / (hi - lo)) - .62) * (1 - (OBJ.flat ?? FLAT));   // flattened toward one grey
+
+  let weight = 0;
+  for (let k = 0; k < px.length; k += 4) if (there(k) > .3) weight += .35 + .65 * tone(k);
+  const want = Math.min(PARTICLES, innerWidth * innerHeight / 28) * (OBJ.density ?? 1);
+  const closest = 1.2 * Math.min(1, Math.sqrt(2.5 / (OBJ.density ?? 1)));   // how near two flakes may sit: a density above 2.5 lets them pack closer, for finer detail
+  const gap = Math.max(closest, Math.sqrt(weight / want));
+
+  const list = [];
+  for (let y = gap / 2; y < h; y += gap) for (let x = gap / 2; x < w; x += gap) {
+    let jx = Math.min(w - 1, Math.max(0, x + (Math.random() - .5) * gap * .9)), jy = Math.min(h - 1, Math.max(0, y + (Math.random() - .5) * gap * .9));
+    const k = (Math.round(jy) * w + Math.round(jx)) * 4, a = soft[k + 3] / 255;
+    const deep = a <= .3 ? 0 : a >= .92 ? 1 : (a - .3) / .62;     // 0 at the outline, 1 well inside
+    if (there(k) < .04) {
+      if (HALO <= 0) continue;                                  // nothing outside the picture
+      // outside the outline: haze and stray ash, thinning out with distance
+      const f = Math.max(a, Math.pow(wide[k + 3] / wideMax, .75) * .8);
+      if (f < .03 || Math.random() > f * (.1 + .22 * HALO) / (MIST_SIZE * MIST_SIZE)) continue;
+      if (Math.random() < .4 / MIST_SIZE) list.push([(jx - mx) / bw, (jy - my) / bh, .55 + Math.random() * .2, gap * (.8 + Math.random() * .7), Math.random(), .35 + .5 * f]);   // a stray speck
+      else list.push([(jx - mx) / bw, (jy - my) / bh, .62, gap * MIST_SIZE * (3 + Math.random() * 5 * (1 - f)), Math.random(), .14 + .45 * f]);                       // a faint puff
+      continue;
+    }
+    const t = tone(k);
+    // toward the edge, merge the flakes into fewer, bigger wisps
+    // (the loose mist puffs, a third of the flakes, merge everywhere)
+    const seed = Math.random(), puff = mist > 0 && (seed * 13.7) % 1 < .32;
+    const grow = puff ? MIST_SIZE : 1 + (MIST_SIZE - 1) * (1 - deep) * mist;
+    if (Math.random() > 1 / (grow * grow)) continue;
+    if (Math.random() > (.35 + .65 * t) * (1 - mist * .45 * (1 - deep)) * Math.min(1, .25 + there(k) * 1.1)) continue;     // sparser toward the edge
+    // near the outline the flakes stray outward and fade, so the edge dissolves into mist
+    const spread = (1 - deep) * gap * 5 * mist;
+    jx += (Math.random() + Math.random() - 1) * spread; jy += (Math.random() + Math.random() - 1) * spread;
+    list.push([(jx - mx) / bw, (jy - my) / bh,
+      Math.min(1, t * (.8 + Math.random() * .4) + (Math.random() < .03 ? .3 : 0)),
+      gap * (.75 + Math.random() * .8) * (Math.random() < .04 ? 2.2 * mist : 1) * (1 + (1 - deep) * .8 * mist) * grow,
+      seed, (1 - mist * .6 * (1 - deep)) * Math.min(1, there(k) * 1.15), px[k] / 255, px[k + 1] / 255, px[k + 2] / 255, wide[k + 3] / wideMax]);   // ... and the picture's colour there
+  }
+  for (let i = list.length - 1; i > 0; i--) { const r = Math.random() * (i + 1) | 0, t = list[i]; list[i] = list[r]; list[r] = t; }
+
+  N = list.length;
+  builtW = box.w;
+  [X, Y, VX, VY, HU, HV, HX, HY, RATE, WAIT, SEED, OP, SX, SY, GR] = Array.from({ length: 15 }, () => new Float32Array(N));   // GR: how far each flake has grown on its way in (0 to 1)
+  dyn = new Float32Array(N * 4);
+  const stat = new Float32Array(N * 3), cols = new Float32Array(N * 3);
+  list.forEach((p, i) => {
+    HU[i] = p[0]; HV[i] = p[1]; SEED[i] = p[4]; OP[i] = p[5];
+    // after the burn the flakes at the outline drift outward and loosen, so the edge spreads; the heart barely moves
+    const edg = Math.min(1, (1 - p[5]) * 2.2), ang = Math.random() * 6.283, out = Math.atan2(p[1] - .5, (p[0] - .5) * 1.6);
+    // the heart loosens too, not just the edge; edge flakes go further, in wilder directions, and a few stray well away
+    const rim = (OBJ.edge ?? EDGE_BURST) * Math.min(1, (1 - (p[9] ?? 1)) * 2.5);   // near the outline by distance (for objects that ask for it)
+    const loose = Math.min(1, (1 - p[5]) * 2.2 * (1 + 1.5 * EDGE_SCATTER) + rim);    // a wider band counts as edge when it is scattered harder
+    const stray = Math.random() < .35 ? Math.random() * 2.2 : 0;
+    const mag = SPREAD * (.35 + edg + loose * EDGE_SCATTER) * (.2 + Math.random() * 1.1) * (1 + loose * EDGE_SCATTER * stray);
+    const wild = .6 + .8 * loose * EDGE_SCATTER;
+    const rad = Math.min(1, Math.hypot(p[0] - .5, p[1] - .5) * 2);   // 0 at the centre, 1 at the edge: the push outward grows toward the edge, so the middle never empties out
+    SX[i] = (Math.cos(ang) * wild + Math.cos(out) * .7 * rad) * mag; SY[i] = (Math.sin(ang) * wild + Math.sin(out) * .7 * rad) * mag;
+    // some flakes hold their place, so a trace of the picture stays after the burst: fewer toward the outline (so the edge still disperses),
+    // each nudged a little (staySoft), so what stays is soft rather than crisp
+    const deepIn = Math.min(1, Math.max(0, ((p[9] ?? 1) - .35) / .5)), keep = (OBJ.stay ?? 0) * Math.pow(deepIn, OBJ.stayEdge ?? 0);
+    if (Math.random() < keep) { const j = OBJ.staySoft ?? 0; SX[i] = (Math.random() + Math.random() - 1) * j; SY[i] = (Math.random() + Math.random() - 1) * j; }
+    stat[i * 3] = p[2]; stat[i * 3 + 1] = p[3]; stat[i * 3 + 2] = p[4];
+    cols[i * 3] = p[6] ?? .5; cols[i * 3 + 1] = p[7] ?? .5; cols[i * 3 + 2] = p[8] ?? .5;
+    // they start as ash strewn over the whole screen, and each waits a moment before it is drawn in
+    X[i] = Math.random() * innerWidth; Y[i] = Math.random() * innerHeight;
+    VX[i] = (Math.random() - .5) * 30; VY[i] = (Math.random() - .5) * 30;
+    WAIT[i] = reduceMotion ? -9 : (.4 + Math.random() * 1.8) * GATHER_SLOW;
+    RATE[i] = 1.8 + Math.random() * 2.6;
+    if (reduceMotion) { X[i] = box.x + p[0] * box.w; Y[i] = box.y + p[1] * box.h; VX[i] = VY[i] = 0; GR[i] = 1; }
+  });
+  agl.bindBuffer(agl.ARRAY_BUFFER, statBuf);
+  agl.bufferData(agl.ARRAY_BUFFER, stat, agl.STATIC_DRAW);
+  agl.bindBuffer(agl.ARRAY_BUFFER, colBuf);
+  agl.bufferData(agl.ARRAY_BUFFER, cols, agl.STATIC_DRAW);
+  agl.bindBuffer(agl.ARRAY_BUFFER, dynBuf);
+  agl.bufferData(agl.ARRAY_BUFFER, dyn, agl.DYNAMIC_DRAW);
+}
+
+function sizeLanding() {
+  if (!agl || !picture) return;
+  const ld = SMALL_SCREEN() ? Math.min(dpr, 1.5) : dpr;   // phones: a touch less sharp, much less work (the look is grainy anyway)
+  land.width = Math.round(innerWidth * ld);
+  land.height = Math.round(innerHeight * ld);
+  agl.viewport(0, 0, land.width, land.height);
+  // keep what has been wiped so far, stretched to the new size
+  const old = mask.width ? (() => { const c = document.createElement("canvas"); c.width = mask.width; c.height = mask.height; c.getContext("2d").drawImage(mask, 0, 0); return c; })() : null;
+  mask.width = Math.ceil(innerWidth / MS); mask.height = Math.ceil(innerHeight / MS);
+  mctx.fillStyle = "#000"; mctx.fillRect(0, 0, mask.width, mask.height);
+  if (old) mctx.drawImage(old, 0, 0, mask.width, mask.height);
+  maskDirty = true;
+  if (!N) { buildAsh(); makePrint(); makeGlow(); makeDetail(); }
+  const box = pictureBox();
+  for (let i = 0; i < N; i++) { HX[i] = box.x + HU[i] * box.w; HY[i] = box.y + HV[i] * box.h; }
+}
+
+// a grainy round dab, used to wipe the ash away
+const dab = document.createElement("canvas");
+{
+  dab.width = dab.height = 64;
+  const g = dab.getContext("2d"), im = g.createImageData(64, 64), rnd = mulberry32(11);
+  for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
+    const d = Math.hypot(x - 31.5, y - 31.5) / 32, f = d >= 1 ? 0 : (1 - d * d) * (1 - d * d), k = (y * 64 + x) * 4;
+    im.data[k] = im.data[k + 1] = im.data[k + 2] = 255;
+    im.data[k + 3] = f * (.45 + .55 * rnd()) * 255;
+  }
+  g.putImageData(im, 0, 0);
+}
+
+// The cursor (or a finger): wherever it swipes, the ash wipes toward white and the flakes scatter, then drift home.
+// It trails the pointer by a moment, so its strokes come out smooth.
+const brush = { x: 0, y: 0, tx: 0, ty: 0, on: false, down: false };
+// is this screen point on the bouquet itself (with a little leeway)? the cursor only answers to the silhouette
+let picAlpha = null;
+// the silhouette floats: a slow rise and fall, a little sideways drift and a slight lean, never quite repeating
+let floatNow = { x: 0, y: 0, a: 0 };
+function floatAt(t) {
+  const w = 6.283 / FLOAT_TIME;
+  return { x: FLOAT * .45 * Math.sin(t * w * .63 + 1.3) + FLOAT * .15 * Math.sin(t * w * 1.7),
+           y: FLOAT * Math.sin(t * w) + FLOAT * .2 * Math.sin(t * w * 2.3 + .7),
+           a: .021 * Math.sin(t * w * .81 + 2.1) };
+}
+function onSilhouette(x, y) {
+  x -= floatNow.x; y -= floatNow.y;
+  if (!picture) return false;
+  if (!picAlpha) picAlpha = picture.getContext("2d").getImageData(0, 0, picture.width, picture.height).data;
+  const b = pictureBox(), k = picture.width / b.w, lee = 14;
+  for (const [dx, dy] of [[0, 0], [lee, 0], [-lee, 0], [0, lee], [0, -lee]]) {
+    const u = Math.round((x + dx - b.x) * k), v = Math.round((y + dy - b.y) * k);
+    if (u >= 0 && v >= 0 && u < picture.width && v < picture.height && picAlpha[(v * picture.width + u) * 4 + 3] > 60) return true;
+  }
+  return false;
+}
+// how wide the silhouette is at this height on screen (from its leftmost to its rightmost edge), so a swipe has to cross that much of it
+function silhouetteSpan(y) {
+  if (!picture) return 0;
+  if (!picAlpha) picAlpha = picture.getContext("2d").getImageData(0, 0, picture.width, picture.height).data;
+  const b = pictureBox(), k = picture.width / b.w, v = Math.round((y - floatNow.y - b.y) * k);
+  if (v < 0 || v >= picture.height) return 0;
+  let lo = -1, hi = -1;
+  for (let u = 0; u < picture.width; u++) if (picAlpha[(v * picture.width + u) * 4 + 3] > 60) { if (lo < 0) lo = u; hi = u; }
+  return lo < 0 ? 0 : (hi - lo) / k;
+}
+function aim(e) {
+  brush.tx = e.clientX; brush.ty = e.clientY;
+  if (!brush.on) { brush.x = brush.tx; brush.y = brush.ty; brush.on = true; }
+  land.style.cursor = live && onSilhouette(e.clientX, e.clientY) ? (brush.down ? "grabbing" : "grab") : "default";
+}
+land.addEventListener("pointermove", aim);
+land.addEventListener("pointerdown", e => {
+  e.preventDefault();
+  aim(e);
+  land.setPointerCapture(e.pointerId);
+  brush.down = true;
+  land.classList.add("sweeping");
+});
+const lift = e => {
+  brush.down = false;
+  land.classList.remove("sweeping");
+  if (e.pointerType !== "mouse") brush.on = false;       // a finger is gone once it lifts
+};
+land.addEventListener("pointerup", lift);
+land.addEventListener("pointercancel", lift);
+land.addEventListener("pointerleave", () => { if (!brush.down) brush.on = false; });
+
+function wipe(x0, y0, x1, y1, speed) {
+  const r = BRUSH_R * (brush.down ? 1.35 : 1) * Math.min(1.4, Math.max(1, Math.min(innerWidth, innerHeight) / 700));
+  const dist = Math.hypot(x1 - x0, y1 - y0), steps = Math.max(1, Math.ceil(dist / (r * .3)));
+  const strength = Math.min(1, speed / 450) * (brush.down ? .3 : .22);
+  if (strength < .01) return;
+  mctx.globalCompositeOperation = "lighter";
+  mctx.globalAlpha = strength;
+  for (let s = 1; s <= steps; s++) {
+    const x = (x0 + (x1 - x0) * s / steps) / MS, y = (y0 + (y1 - y0) * s / steps) / MS, rr = r / MS * (.85 + Math.random() * .3);
+    mctx.drawImage(dab, x - rr, y - rr, rr * 2, rr * 2);
+  }
+  mctx.globalAlpha = 1;
+  mctx.globalCompositeOperation = "source-over";
+  maskDirty = true;
+  if (!swiped) { swiped = true; hint.classList.add("gone"); }
+}
+
+// how much of the screen is clear, checked a few times a second
+function measureClean() {
+  const d = mctx.getImageData(0, 0, mask.width, mask.height).data;
+  let n = 0;
+  for (let i = 0; i < d.length; i += 4) if (d[i] > 128) n++;
+  cleanShare = n / (d.length / 4);
+}
+
+// one frame of the landing
+function stepLanding(dt, now) {
+  if (!agl || !N || dt <= 0) return;
+  if (!landStart) landStart = now;
+  const t = (now - landStart) / 1000;
+  const gk = Math.min(1, Math.max(0, (t - GREEN_DELAY) / GREEN_FADE)), greenIn = gk * gk * (3 - 2 * gk);   // the green fades in slowly
+  if (jumpedTo < JUMP_LAYER) {   // preview: the flakes straight into place, then each swipe done at once
+    if (jumpedTo === 1 && stage === 1 && !finishAt) {
+      landStart = now - 30000; formed = 1; formedAt = now - 1e5; hinted = swiped = true; hint.classList.add("gone");
+      for (let i = 0; i < N; i++) { X[i] = HX[i]; Y[i] = HY[i]; VX[i] = VY[i] = 0; GR[i] = 1; }
+    }
+    if (stage === jumpedTo && !finishAt) { finishAt = now - AUTO_CLEAN_MS; originX = innerWidth / 2; originY = innerHeight / 2; jumpedTo++; }
+  }
+  if (formed >= 1 && !formedAt) formedAt = now;
+  live = stage > 1 || (formedAt && now - formedAt >= SETTLE_MS) || !!finishAt;   // the silhouette reacts only once it is fully formed
+  if (!hinted && live && t > 3.2 * GATHER_SLOW) { hinted = true; if (!swiped) hint.classList.remove("gone"); }
+
+  const bx0 = brush.x, by0 = brush.y;
+  let bvx = 0, bvy = 0;
+  if (brush.on) {
+    const f = 1 - Math.exp(-dt / .045);
+    brush.x += (brush.tx - brush.x) * f; brush.y += (brush.ty - brush.y) * f;
+    bvx = (brush.x - bx0) / dt; bvy = (brush.y - by0) / dt;
+    if (!finishAt && live) {
+      // the background no longer wipes: only a swipe through the bouquet itself counts, and sets the ash burning
+      const pb = pictureBox();
+      if (onSilhouette(brush.x, brush.y)) {
+        if (!swiped) { swiped = true; hint.classList.add("gone"); }
+        through += Math.hypot(brush.x - bx0, brush.y - by0);
+        const need = Math.min(pb.w * SWIPE_THROUGH, Math.max(pb.w * .22, silhouetteSpan(brush.y) * .75));   // most of the way across the silhouette where the swipe passes (it is narrow in places)
+        if (through > need && now - stageAt > 700) { finishAt = now; originX = brush.x; originY = brush.y; }
+      } else through *= Math.exp(-dt * 1.5);
+    }
+  }
+  if (now - lastCount > 250) { lastCount = now; measureClean(); if (!finishAt && live && cleanShare >= CLEAN_AT) { finishAt = now; originX = brush.x || innerWidth / 2; originY = brush.y || innerHeight / 2; } }
+  // how far the clearing must spread: to the farthest corner from where the bouquet was swiped
+  const reach = Math.hypot(Math.max(originX, innerWidth - originX), Math.max(originY, innerHeight - originY)) + 420;
+  // the word surfaces while the first layer's ash burns away, in step with it
+  if (stage === 1 && finishAt && OBJ.words.length && !placed.length) { placeWords(OBJ.words); words.textContent = OBJ.words.join(". "); }
+  // the five objects surface a set time after the second swipe
+  if (stage === 2 && finishAt && now - finishAt >= DOTS_AFTER_MS && !objectsShown) {
+    objectsShown = true;
+    // the last object of the round (every other one has been played): its "Next" leads to the closing instead of another object
+    lastOfRound = PREVIEW_END || (JUMP_LAYER === 1 && !playList().some(k => k !== CURRENT && !picks.played.includes(k)));
+    objectsEl.innerHTML = pickedOrder().map((o, k) => `<span data-object="${o + 1}" class="${lightColour(OBJECTS[o].colour) ? 'light' : ''}${o !== CURRENT && picks.played.includes(o) ? ' burnt done' : ''}" style="--c:${OBJECTS[o].colour};transition-delay:${k * .07}s;--breath-delay:${k * .5}s"></span>`).join("");
+    void objectsEl.offsetWidth;                     // let the browser see them hidden first, so they fade in
+    objectsEl.classList.add("show");
+    nextBtn.classList.add("show"); nextBtn.tabIndex = 0;   // "Next" follows the dots
+    // a moment after they have all appeared, this object's dot burns away wherever it sits in the order, leaving a blank grey dot (the ones played before are grey already)
+    setTimeout(() => { markPlayed(); const d = objectsEl.querySelector(`[data-object="${CURRENT + 1}"]`); if (d) d.classList.add("burnt"); }, (OBJECTS.length - 1) * 70 + 600 + DOT_BURN_AFTER_MS);
+  }
+  // the first burn done: the grey layer is now the one to swipe and burn through
+  if (stage === 1 && finishAt && now - finishAt >= AUTO_CLEAN_MS) {
+    stage = 2; stageAt = now; finishAt = 0; through = 0; cleanShare = 0;
+    mctx.fillStyle = "#000"; mctx.fillRect(0, 0, mask.width, mask.height); maskDirty = true;
+  }
+  const fk = finishAt ? Math.min(1, (now - finishAt) / AUTO_CLEAN_MS) : 0, finish = fk * fk * (3 - 2 * fk);
+
+  // the flakes
+  const speed = Math.hypot(bvx, bvy);
+  const sx = brush.x - bx0, sy = brush.y - by0, sl2 = sx * sx + sy * sy;
+  const R = BRUSH_R * (brush.down ? 1.6 : 1.3) * TOUCH_REACH, R2 = R * R;
+  const drag = Math.exp(-dt * 4.4), fadeIn = Math.min(1, t / .8);
+  // untouched, the bouquet is never quite still: it sways in slow waves and its flakes quiver; a little calmer once clean
+  const flutter = IDLE_MOTION * (1 - .45 * (stage > 1 ? 1 : Math.min(1, Math.max(cleanShare / CLEAN_AT, finish))));
+  const bwNow = pictureBox().w, spreadNow = bwNow * (OBJ.spread ?? 1);
+  floatNow = reduceMotion ? { x: 0, y: 0, a: 0 } : floatAt(t);
+  const pbF = pictureBox(), fcx = pbF.x + pbF.w / 2, fcy = pbF.y + pbF.h / 2, fc = Math.cos(floatNow.a), fs = Math.sin(floatNow.a);
+  const growReach = .45 * Math.min(innerWidth, innerHeight);   // within this distance of its place a flake grows to full size
+  let grSum = 0;
+  for (let i = 0, j = 0, n = N; i < n; i++, j += 4) {
+    let x = X[i], y = Y[i], vx = VX[i], vy = VY[i];
+    const since = t - WAIT[i], g = since <= 0 ? 0 : since >= 1.6 * GATHER_SLOW ? 1 : since / (1.6 * GATHER_SLOW), ramp = g * g * (3 - 2 * g);
+    if (brush.on && live) {
+      let u = sl2 > 0 ? ((x - bx0) * sx + (y - by0) * sy) / sl2 : 1;
+      u = u < 0 ? 0 : u > 1 ? 1 : u;
+      const dx = x - (bx0 + sx * u), dy = y - (by0 + sy * u), d2 = dx * dx + dy * dy;
+      if (d2 < R2) {
+        // scattered: thrown outward and along the swipe, harder the faster it moves
+        const d = Math.sqrt(d2) + .01, w = 1 - d / R;
+        const push = w * (w + .35) * (7000 + speed * 16) * dt * SCATTER, carry = w * 9 * dt * SCATTER;
+        vx += dx / d * push + (bvx - vx) * carry + (Math.random() - .5) * speed * w * .4 * dt * 60 * SCATTER;
+        vy += dy / d * push + (bvy - vy) * carry + (Math.random() - .5) * speed * w * .4 * dt * 60 * SCATTER;
+      }
+    }
+    if (ramp < 1) {                // not yet called in: it drifts on a slow draught
+      const k = 26 * dt * (1 - ramp);
+      vx += (Math.sin(y * .011 + t * .7) + Math.sin((x + y) * .006 - t * .45)) * k;
+      vy += (Math.cos(x * .012 - t * .6) + Math.sin((x - y) * .007 + t * .5)) * k;
+    }
+    vx *= drag; vy *= drag;
+    // drawn back to its place in the bouquet, circling as it comes
+    let h0 = HX[i], v0 = HY[i];
+    const s = SEED[i] * 40;
+    if (finishAt || stage > 1) {   // burnt: drift out to its looser place
+      const b = stage > 1 ? 1 : Math.min(1, Math.max(0, (finish * reach - Math.hypot(h0 - originX, v0 - originY) - 60) / 400));
+      h0 += SX[i] * spreadNow * b; v0 += SY[i] * spreadNow * b;
+    }
+    { const dx = h0 - fcx, dy = v0 - fcy; h0 = fcx + dx * fc - dy * fs + floatNow.x; v0 = fcy + dx * fs + dy * fc + floatNow.y; }   // floating
+    const hx = h0 + (Math.sin(v0 * .017 + t * 1.1) + Math.sin(v0 * .041 - t * .7 + h0 * .01) * .5 + Math.sin(t * 2.3 + s) * .45) * flutter;
+    const hy = v0 + (Math.cos(h0 * .021 - t * .9) * .6 + Math.cos(t * 1.9 + s * 1.7) * .45) * flutter;
+    if (Math.random() < .0006 * dt * 60) { vx += (Math.random() - .5) * 90; vy -= 20 + Math.random() * 60; }   // now and then a flake lifts off and drifts back
+    const e = (1 - Math.exp(-dt * RATE[i] / (GR[i] < 1 ? GATHER_SLOW : 1))) * ramp, rx = hx - x, ry = hy - y, turn = (1 - ramp) * .9, ct = 1 - turn * turn / 2;
+    if (finishAt) {                // as the burning edge passes, the flakes stir and lift, then settle back
+      const behind = finish * reach - Math.hypot(x - originX, y - originY);
+      const k = Math.max(0, 1 - Math.abs(behind - 80) / 160);
+      if (k > 0) { vy -= 200 * k * dt; vx += (Math.random() - .5) * 450 * k * dt; }
+    }
+    x += vx * dt + (rx * ct - ry * turn) * e;
+    y += vy * dt + (rx * turn + ry * ct) * e;
+    X[i] = x; Y[i] = y; VX[i] = vx; VY[i] = vy;
+    // small while it flies in, growing as it nears its place (once grown it stays full size, even when a swipe throws it about)
+    if (GR[i] < 1) {
+      const near = 1 - Math.min(1, Math.hypot(hx - x, hy - y) / growReach), soon = Math.min(1, Math.max(0, since / (2.2 * GATHER_SLOW)));   // (and never faster than this, so even the flakes that start close by begin small)
+      GR[i] = Math.max(GR[i], Math.min(near * near * (3 - 2 * near), soon), since > 5 * GATHER_SLOW ? 1 : 0);
+    }
+    grSum += GR[i];
+    dyn[j] = x; dyn[j + 1] = y; dyn[j + 2] = fadeIn * OP[i]; dyn[j + 3] = ARRIVE_SMALL + (1 - ARRIVE_SMALL) * GR[i];
+  }
+  { const m = N ? grSum / N : 1, f = Math.min(1, Math.max(0, (m - .15) / .75)); formed = Math.max(formed, f * f * (3 - 2 * f)); }   // (it never fades back out)
+
+  // draw: the ground first, then the flakes over it
+  if (maskDirty) {
+    agl.activeTexture(agl.TEXTURE0);
+    agl.bindTexture(agl.TEXTURE_2D, maskTex);
+    agl.texImage2D(agl.TEXTURE_2D, 0, agl.RGBA, agl.RGBA, agl.UNSIGNED_BYTE, mask);
+    maskDirty = false;
+  }
+  stepWordFx(dt, stage === 1 && finishAt ? finish * reach - 90 : stage > 1 ? 1e9 : -1);
+  const box = printBox(pictureBox()), time = now / 1000;
+  box.x += floatNow.x; box.y += floatNow.y;   // the glow floats with it
+  agl.disable(agl.BLEND);
+  agl.useProgram(bgP);
+  agl.uniform1i(U.bg.uMask, 0); agl.uniform1i(U.bg.uPrint, 1); agl.uniform1i(U.bg.uWords, 2); agl.uniform1i(U.bg.uGlow, 3); agl.uniform1i(U.bg.uDetail, 4);
+  { const pb = pictureBox(); agl.uniform3f(U.bg.uSpin, floatNow.a, pb.x + pb.w / 2 + floatNow.x, pb.y + pb.h / 2 + floatNow.y); }
+  agl.uniform2f(U.bg.uRes, innerWidth, innerHeight);
+  agl.uniform4f(U.bg.uBox, box.x, box.y, box.w, box.h);
+  agl.uniform1f(U.bg.uForm, formed);
+  agl.uniform1f(U.bg.uTime, time); agl.uniform1f(U.bg.uFinish, finish); agl.uniform1f(U.bg.uDpr, land.width / innerWidth); agl.uniform2f(U.bg.uOrigin, originX, innerHeight - originY); agl.uniform1f(U.bg.uReach, reach); agl.uniform1f(U.bg.uStage, stage); agl.uniform1f(U.bg.uGreen, greenIn);
+  agl.bindBuffer(agl.ARRAY_BUFFER, quadBuf);
+  agl.enableVertexAttribArray(0);
+  agl.vertexAttribPointer(0, 2, agl.FLOAT, false, 0, 0);
+  agl.disableVertexAttribArray(1); agl.disableVertexAttribArray(2);
+  agl.drawArrays(agl.TRIANGLE_STRIP, 0, 4);
+
+  agl.enable(agl.BLEND);
+  agl.useProgram(ptP);
+  agl.uniform1i(U.pt.uMask, 0);
+  agl.uniform2f(U.pt.uRes, innerWidth, innerHeight);
+  agl.uniform1f(U.pt.uScale, land.width / innerWidth * pictureBox().w / builtW);
+  agl.uniform1f(U.pt.uFinish, finish); agl.uniform1f(U.pt.uDpr, land.width / innerWidth); agl.uniform1f(U.pt.uTime, time); agl.uniform2f(U.pt.uOrigin, originX, innerHeight - originY); agl.uniform1f(U.pt.uReach, reach); agl.uniform1f(U.pt.uStage, stage); agl.uniform1f(U.pt.uGreen, greenIn);
+  agl.bindBuffer(agl.ARRAY_BUFFER, dynBuf);
+  agl.bufferSubData(agl.ARRAY_BUFFER, 0, dyn);
+  agl.vertexAttribPointer(0, 4, agl.FLOAT, false, 0, 0);
+  agl.bindBuffer(agl.ARRAY_BUFFER, statBuf);
+  agl.enableVertexAttribArray(1);
+  agl.vertexAttribPointer(1, 3, agl.FLOAT, false, 0, 0);
+  agl.bindBuffer(agl.ARRAY_BUFFER, colBuf);
+  agl.enableVertexAttribArray(2);
+  agl.vertexAttribPointer(2, 3, agl.FLOAT, false, 0, 0);
+  agl.drawArrays(agl.POINTS, 0, N);
+}
+
+/* ───────────── the words left in ash ───────────── */
+const wordCv = document.createElement("canvas");
+let placed = [];     // each word and where it sits: { text, fx, fy, fw } as shares of the screen (fw: its width)
+function placeWords(list) {
+  placed = [];
+  const fs = wordSize(), b = pictureBox(), pad = 30, m = Math.max(16, fs * .8);
+  const low = OBJ.notes ? Math.max(m, innerHeight * .09 + 56) : m;   // with "Tap to read" at the bottom, the words keep above it
+  const order = list.slice().sort(() => Math.random() - .5);       // which word goes where changes each visit
+  const widest = Math.max(...order.map(t => measureWord(t, fs)));
+  // the two sides of the bouquet; on a narrow screen (a phone held upright) there is no room beside it, so use above and below
+  const sideBySide = b.x - pad - m >= widest && innerWidth - (b.x + b.w + pad) - m >= widest;
+  const halves = sideBySide
+    ? [{ x0: m, x1: b.x - pad, y0: m + fs, y1: innerHeight - low }, { x0: b.x + b.w + pad, x1: innerWidth - m, y0: m + fs, y1: innerHeight - low }]
+    : [{ x0: m, x1: innerWidth - m, y0: m + fs, y1: Math.max(m + fs, b.y - pad) }, { x0: m, x1: innerWidth - m, y0: Math.min(innerHeight - low, b.y + b.h + pad + fs), y1: innerHeight - low }];
+  const first = Math.random() < .5 ? 0 : 1;
+  const groups = [[], []];
+  order.forEach((t, k) => groups[(first + k) % 2].push(t));        // alternate sides, so they split as evenly as they can
+  groups.forEach((g, side) => {
+    const h = halves[side];
+    g.forEach((text, k) => {
+      const tw = measureWord(text, fs);
+      // spread evenly down the side (or across, above and below), each in its own slot, nudged a little at random
+      let x, y;
+      if (sideBySide) {
+        const slot = (h.y1 - h.y0) / g.length;
+        y = h.y0 + slot * (k + .5 + (Math.random() - .5) * .45);
+        x = h.x0 + Math.random() * Math.max(0, h.x1 - h.x0 - tw);
+      } else {
+        const slot = (h.x1 - h.x0) / g.length;
+        x = h.x0 + slot * (k + .5) - tw / 2 + (Math.random() - .5) * Math.max(0, slot - tw) * .8;
+        x = Math.max(h.x0, Math.min(h.x1 - tw, x));
+        y = h.y0 + Math.random() * Math.max(0, h.y1 - h.y0);
+      }
+      placed.push({ text, fx: x / innerWidth, fy: y / innerHeight });
+    });
+  });
+  drawWords();
+}
+function wordSize() { return Math.max(WORD_SIZE[0], Math.min(WORD_SIZE[2], Math.min(innerWidth, innerHeight) * WORD_SIZE[1] / 100)); }
+function measureWord(text, fs) {
+  const c = wordCv.getContext("2d"); c.font = `400 ${fs}px ${WORD_FONT}`;
+  return c.measureText(text).width + fs * .14 * (text.length - 1);
+}
+function drawWords() {
+  if (!agl || !placed.length) return;
+  wordCv.width = Math.ceil(innerWidth); wordCv.height = Math.ceil(innerHeight);
+  const c = wordCv.getContext("2d"), fs = wordSize();
+  c.fillStyle = "#000"; c.fillRect(0, 0, wordCv.width, wordCv.height);
+  c.font = `400 ${fs}px ${WORD_FONT}`;
+  // green: which word owns this patch of screen (so each can float on its own); red: the letters
+  c.globalCompositeOperation = "lighter";
+  const pad = FLOAT + 16;
+  placed.forEach((w, n) => {
+    c.fillStyle = `rgb(0,${(n + 1) * 40},0)`;
+    c.fillRect(w.fx * innerWidth - pad, w.fy * innerHeight - fs * 1.1 - pad, measureWord(w.text, fs) + pad * 2, fs * 1.5 + pad * 2);
+  });
+  c.fillStyle = "#f00";
+  for (const w of placed) {
+    let x = w.fx * innerWidth;
+    for (const ch of w.text) { c.fillText(ch, x, w.fy * innerHeight); x += c.measureText(ch).width + fs * .14; }
+  }
+  c.globalCompositeOperation = "source-over";
+  agl.activeTexture(agl.TEXTURE2);
+  agl.bindTexture(agl.TEXTURE_2D, wordsTex);
+  agl.texImage2D(agl.TEXTURE_2D, 0, agl.RGBA, agl.RGBA, agl.UNSIGNED_BYTE, wordCv);
+}
+
+/* ───────────── the word gathering: ash and embers drawn into the letters as the burn reaches them ───────────── */
+const fxCv = document.getElementById("wordfx"), fx = fxCv.getContext("2d");
+let fxParts = [], fxSeeded = false, fxDone = false;
+function sizeWordFx() {
+  fxCv.width = Math.round(innerWidth * dpr); fxCv.height = Math.round(innerHeight * dpr);
+  fx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+// pick points inside the letters, and give each a flake that will fly in to it
+function seedWordFx() {
+  const fs = wordSize(), pts = [];
+  for (const wd of placed) {
+    const x0 = Math.max(0, Math.floor(wd.fx * innerWidth - fs * .3)), y0 = Math.max(0, Math.floor(wd.fy * innerHeight - fs * 1.1));
+    const w = Math.min(wordCv.width - x0, Math.ceil(measureWord(wd.text, fs) + fs * .6)), h = Math.min(wordCv.height - y0, Math.ceil(fs * 1.6));
+    if (w <= 0 || h <= 0) continue;
+    const d = wordCv.getContext("2d").getImageData(x0, y0, w, h).data;
+    for (let y = 0; y < h; y += 2) for (let x = 0; x < w; x += 2) if (d[(y * w + x) * 4] > 140) pts.push([x0 + x, y0 + y]);
+  }
+  const n = Math.min(WORD_FX, pts.length);
+  fxParts = [];
+  for (let i = 0; i < n; i++) {
+    const [tx, ty] = pts[Math.random() * pts.length | 0];
+    const a = Math.random() * 6.283, dist = 30 + Math.random() * 100;
+    fxParts.push({ tx, ty, sx: tx + Math.cos(a) * dist, sy: ty + Math.sin(a) * dist * .7 - 20, bend: (Math.random() - .5) * 90,
+      reach: Math.hypot(tx - originX, ty - originY) + (Math.random() - .5) * 60, t: -1, dur: .8 + Math.random() * .9,
+      size: .7 + Math.random() * 1.9, hot: Math.random(), spark: Math.random() < .07 * FIRE });
+  }
+}
+function stepWordFx(dt, front) {
+  if (front < 0 || !placed.length || fxDone) return;
+  if (!fxSeeded) { fxSeeded = true; seedWordFx(); }
+  if (!fxParts.length) { fxDone = true; return; }
+  fx.clearRect(0, 0, innerWidth, innerHeight);
+  let alive = 0;
+  for (const p of fxParts) {
+    if (p.t < 0) { if (front >= p.reach) p.t = 0; else { alive++; continue; } }
+    p.t += dt / p.dur;
+    const life = p.t;
+    if (life > 2.2) continue;
+    alive++;
+    if (life <= 1) {
+      // flying in on a curve, hot at first, cooling to ash as it lands
+      const e = 1 - Math.pow(1 - life, 3), nx = -(p.ty - p.sy), ny = p.tx - p.sx, nl = Math.hypot(nx, ny) || 1;
+      const bow = Math.sin(life * Math.PI) * p.bend;
+      const x = p.sx + (p.tx - p.sx) * e + nx / nl * bow, y = p.sy + (p.ty - p.sy) * e + ny / nl * bow;
+      const heat = Math.max(0, 1 - life * 1.6) * (.35 + .65 * p.hot) * FIRE;
+      // ember orange cooling to dark ash
+      const r = Math.round(42 + 213 * heat), g = Math.round(40 + (70 + 90 * heat) * heat), b = Math.round(38 - 20 * heat);
+      const fade = Math.min(1, life * 6);
+      if (heat > .25) {
+        fx.globalCompositeOperation = "lighter";
+        fx.fillStyle = `rgba(255,90,20,${heat * .1 * fade})`;
+        fx.beginPath(); fx.arc(x, y, p.size * 2.6, 0, 6.283); fx.fill();
+        fx.globalCompositeOperation = "source-over";
+      }
+      fx.fillStyle = `rgba(${r},${g},${b},${(.7 + .3 * heat) * fade})`;
+      fx.beginPath(); fx.arc(x, y, p.size * (.8 + heat * .4), 0, 6.283); fx.fill();
+    } else if (p.spark) {
+      // a few let go again as tiny embers rising off the letters
+      const k = (life - 1) / 1.2, x = p.tx + Math.sin(k * 9 + p.hot * 6) * 6, y = p.ty - k * 46;
+      fx.fillStyle = `rgba(255,${110 + Math.round(90 * (1 - k))},30,${(1 - k) * .9})`;
+      fx.beginPath(); fx.arc(x, y, p.size * .7 * (1 - k * .5), 0, 6.283); fx.fill();
+    } else {
+      // landed: it settles into the ash of the letter and fades
+      const k = (life - 1) / 1.2;
+      fx.fillStyle = `rgba(40,38,36,${(1 - k) * .6})`;
+      fx.beginPath(); fx.arc(p.tx, p.ty, p.size, 0, 6.283); fx.fill();
+    }
+  }
+  if (!alive) { fx.clearRect(0, 0, innerWidth, innerHeight); fxDone = true; fxParts = []; }
+}
+
+/* ───────────── words that open a paragraph (an object's notes) ───────────── */
+const noteEl = document.getElementById("note");
+let wordBtns = [], noteOpen = false, noteFrom = null, noteSeen = false;   // noteSeen: a word has been opened (the "Tap to read" line then fades)
+const readHint = document.getElementById("readhint");
+function openNote(word) {
+  noteEl.querySelector(".from").textContent = OBJ.title || "";
+  noteEl.querySelector("h2").textContent = word;
+  noteEl.querySelector(".text").textContent = OBJ.notes[word];
+  noteFrom = document.activeElement;
+  noteEl.classList.add("open"); noteOpen = true; noteSeen = true; brush.on = brush.down = false;
+  noteEl.querySelector(".card").focus({ preventScroll: true });   // (the card, so no focus ring flashes on the Close button)
+}
+function closeNote() {
+  if (!noteOpen) return;
+  noteEl.classList.remove("open"); noteOpen = false; brush.on = brush.down = false;
+  if (noteFrom && noteFrom.focus) noteFrom.focus({ preventScroll: true });
+}
+noteEl.addEventListener("click", e => { if (e.target === noteEl || e.target.closest(".close")) closeNote(); });   // the close button, or a tap outside the card
+addEventListener("keydown", e => { if (e.key === "Escape") closeNote(); });
+// each frame: keep one button over each word, floating with it, pressable only while the words lie on the grey layer
+function stepWordButtons(now) {
+  if (!OBJ.notes || !placed.length) return;
+  if (!wordBtns.length) wordBtns = placed.map(w => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "wordbtn"; b.tabIndex = -1; b.setAttribute("aria-label", w.text);
+    b.addEventListener("click", () => openNote(w.text));
+    document.body.appendChild(b); return b;
+  });
+  const on = stage === 2 && !finishAt && !!OBJ.notes;
+  readHint.classList.toggle("gone", !on || noteSeen);   // "Tap to read" while the words can be opened, until one has been
+  const fs = wordSize(), t = now / 1000, ww = 6.2832 / FLOAT_TIME;
+  placed.forEach((w, n) => {
+    const b = wordBtns[n], id = n + 1;
+    if (!b) return;
+    if (b.classList.contains("show") !== on) { b.classList.toggle("show", on); b.tabIndex = on ? 0 : -1; }
+    if (!on) return;
+    // the same drift the shader gives each word (its y runs upward, the page's runs down)
+    const dx = FLOAT * .5 * Math.sin(t * ww * .7 + id * 2.1) + FLOAT * .15 * Math.sin(t * ww * 1.6 + id);
+    const dy = -FLOAT * .7 * Math.sin(t * ww * (.9 + .08 * id) + id * 1.7);
+    const bw = measureWord(w.text, fs), bh = fs * 1.5, extra = Math.max(0, 44 - bh) / 2;   // at least a 44px thumb target
+    b.style.width = bw + "px"; b.style.height = bh + extra * 2 + "px";
+    b.style.transform = `translate(${w.fx * innerWidth + dx}px, ${w.fy * innerHeight - fs * 1.08 - extra + dy}px)`;
+  });
+}
+
+/* ───────────── sequence ───────────── */
+function layout() {
+  dpr = Math.min(devicePixelRatio || 1, 2);
+  sizeLanding();
+  sizeWordFx();
+  if (agl && picture) { if (placed.length) drawWords(); else { wordCv.width = wordCv.height = 1; agl.activeTexture(agl.TEXTURE2); agl.bindTexture(agl.TEXTURE_2D, wordsTex); agl.texImage2D(agl.TEXTURE_2D, 0, agl.RGBA, agl.RGBA, agl.UNSIGNED_BYTE, wordCv); } }
+}
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, .05);
+  last = now;
+  stepLanding(dt, now);
+  stepWordButtons(now);
+  requestAnimationFrame(frame);
+}
+
+async function begin() {
+  if (agl) picture = await loadPicture();
+  if (!picture) { agl = null; land.style.display = "none"; }
+  layout();
+  requestAnimationFrame(frame);
+}
+
+let resizeTimer;
+addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(layout, 120); });
+begin();
+</script>
+</body>
+</html>
