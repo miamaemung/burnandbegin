@@ -179,6 +179,15 @@ function loadPicks() {
   return { order: [], played: [], at: 0 };
 }
 const savePicks = () => { try { localStorage.setItem(PICKS_KEY, JSON.stringify(picks)); } catch (e) {} };
+// refreshing the page starts the whole site over: picks forgotten, back at the first object (the photo frame)
+// (a preview link with &layer= or &end keeps its place, so it can be refreshed while testing)
+(function startOverOnRefresh() {
+  const nav = performance.getEntriesByType && performance.getEntriesByType("navigation")[0];
+  const q = new URLSearchParams(location.search);
+  if (!nav || nav.type !== "reload" || q.has("layer") || q.has("end")) return;
+  try { localStorage.removeItem(PICKS_KEY); } catch (e) {}
+  if (location.search) location.replace(location.pathname + location.hash);
+})();
 let picks = loadPicks();
 (function readTag() {
   const q = new URLSearchParams(location.search);
