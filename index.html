@@ -6,9 +6,12 @@
 <meta name="theme-color" content="#f4f4f2">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>ไหม้รัก</title>
+<link rel="preload" href="fonts/Krub-Regular.ttf" as="font" type="font/ttf" crossorigin>
 <style>
-  /* one typeface everywhere: Menlo (on Macs and iPhones), with close monospaced stand-ins elsewhere */
-  :root { --font: Menlo, Consolas, "DejaVu Sans Mono", monospace; }
+  /* one typeface everywhere: Krub (fonts/ folder, SIL Open Font License), regular and italic */
+  @font-face { font-family: "Krub"; src: url("fonts/Krub-Regular.ttf") format("truetype"); font-weight: 400; font-style: normal; font-display: swap; }
+  @font-face { font-family: "Krub"; src: url("fonts/Krub-Italic.ttf") format("truetype"); font-weight: 400; font-style: italic; font-display: swap; }
+  :root { --font: "Krub", "Helvetica Neue", Arial, sans-serif; }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; overscroll-behavior: none; }
   body {
@@ -295,7 +298,7 @@ nextBtn.addEventListener("click", () => {   // the page starts again on the next
   const list = playList(), n = nextToPlay(CURRENT) ?? list[(list.indexOf(CURRENT) + 1) % list.length];
   location.href = location.pathname + (n !== undefined ? "?play=" + (n + 1) : "") + location.hash;
 });
-const WORD_FONT = 'Menlo, Consolas, "DejaVu Sans Mono", monospace';   // the ash words' typeface (the same as the rest of the page)
+const WORD_FONT = '"Krub", "Helvetica Neue", Arial, sans-serif';   // the ash words' typeface (the same as the rest of the page)
 const WORD_DARK = .62;     // how dark the ash words are on the grey (1 = as dark as the first layer's ash)
 const WORD_FX = 480;                           // how many flakes and embers fly in to form the word (0 = none)
 const WORD_SIZE = [19, 3.5, 35];                // the word's size in px: [smallest, % of the screen's shorter side, largest]
@@ -1112,6 +1115,8 @@ function placeWords(list) {
   });
   drawWords();
 }
+// the ash words are painted onto a canvas, which does not wait for the font: load Krub first, and repaint them if it arrives late
+if (document.fonts) document.fonts.load(`400 20px ${WORD_FONT}`).then(() => { if (agl && placed.length) drawWords(); }).catch(() => {});
 function wordSize() { return Math.max(WORD_SIZE[0], Math.min(WORD_SIZE[2], Math.min(innerWidth, innerHeight) * WORD_SIZE[1] / 100)); }
 function measureWord(text, fs) {
   const c = wordCv.getContext("2d"); c.font = `400 ${fs}px ${WORD_FONT}`;
